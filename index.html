@@ -1,0 +1,306 @@
+﻿<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070c" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="application-name" content="FootballÍQ" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="FootballÍQ" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>FootballÍQ - Calendario, gironi e AnalisiIQ</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png" />
+    <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+    <link rel="apple-touch-startup-image" href="assets/splash/splash-1170x2532.png" />
+    <link rel="stylesheet" href="styles.css?v=35" />
+  </head>
+  <body class="is-loading home-active">
+    <div class="app-status" id="appStatus">Caricamento app...</div>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-stack">
+          <p class="eyebrow">Mondiali 2026</p>
+          <h1 class="brand-wordmark" aria-label="FootballIQ">
+            <span class="wordmark-main">Football</span><span class="wordmark-iq"><span class="wordmark-i">I</span><span class="wordmark-q">Q</span></span>
+          </h1>
+          <button class="icon-button" id="timeModeButton" type="button" title="Cambia orario">
+            <span aria-hidden="true">Ora</span>
+            <span id="timeModeLabel">Italia</span>
+          </button>
+        </div>
+        <div class="topbar-actions" aria-label="Azioni rapide">
+          <img class="world-cup-logo" src="assets/logos/FIFA-Logo-2026.png" alt="FIFA World Cup 2026" />
+        </div>
+      </header>
+
+      <main>
+        <nav class="tabs" aria-label="Sezioni app">
+          <button class="tab is-active" data-tab="home" type="button">
+            Home
+          </button>
+          <button class="tab" data-tab="calendar" type="button">
+            Calendario
+          </button>
+          <button class="tab" data-tab="groups" type="button">
+            Gironi
+          </button>
+          <button class="tab" data-tab="teams" type="button">
+            Squadre
+          </button>
+          <button class="tab" data-tab="predictor" type="button">
+            <span class="analisi-wordmark">Analisi<span class="iq-cluster"><span class="iq-ball-i">I</span>Q</span></span>
+          </button>
+        </nav>
+
+        <section class="overview-band home-only" aria-label="Home">
+          <div class="overview-copy">
+            <div class="player-carousel" aria-label="Calciatori rappresentativi">
+              <article class="player-slide argentina" data-player="messi">
+                <img class="sticker-flag" src="https://flagcdn.com/48x36/ar.png" alt="" />
+                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Lionel-Messi-Argentina-2022-FIFA-World-Cup.jpg?width=820" alt="Lionel Messi" loading="eager" fetchpriority="high" decoding="async" />
+                <div class="player-card-meta">
+                  <span>Argentina</span>
+                  <strong>Lionel Messi</strong>
+                  <small>24-6-1987 | 1,70 m | 72 kg</small>
+                  <em>Inter Miami CF (USA)</em>
+                </div>
+              </article>
+              <article class="player-slide brazil">
+                <img class="sticker-flag" src="https://flagcdn.com/48x36/br.png" alt="" />
+                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Neymar_Jr._with_Al_Hilal%2C_3_October_2023_-_01.jpg?width=900" alt="Neymar ritratto in primo piano" loading="eager" fetchpriority="high" decoding="async" />
+                <div class="player-card-meta">
+                  <span>Brasile</span>
+                  <strong>Neymar</strong>
+                  <small>5-2-1992 | 1,75 m | 68 kg</small>
+                  <em>Santos FC (BRA)</em>
+                </div>
+              </article>
+              <article class="player-slide portugal">
+                <img class="sticker-flag" src="https://flagcdn.com/48x36/pt.png" alt="" />
+                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Cristiano_Ronaldo_2018.jpg?width=760" alt="Cristiano Ronaldo" loading="lazy" decoding="async" />
+                <div class="player-card-meta">
+                  <span>Portogallo</span>
+                  <strong>C. Ronaldo</strong>
+                  <small>5-2-1985 | 1,87 m | 83 kg</small>
+                  <em>Al Nassr FC (KSA)</em>
+                </div>
+              </article>
+              <article class="player-slide france">
+                <img class="sticker-flag" src="https://flagcdn.com/48x36/fr.png" alt="" />
+                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/2022_FIFA_World_Cup_France_4%E2%80%931_Australia_-_%287%29_%28cropped%29.jpg?width=820" alt="Kylian Mbappe con la Francia" loading="lazy" decoding="async" />
+                <div class="player-card-meta">
+                  <span>Francia</span>
+                  <strong>Kylian Mbappe</strong>
+                  <small>20-12-1998 | 1,78 m | 75 kg</small>
+                  <em>Real Madrid CF (ESP)</em>
+                </div>
+              </article>
+              <article class="player-slide england">
+                <img class="sticker-flag" src="https://flagcdn.com/48x36/gb-eng.png" alt="" />
+                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Harry_Kane_2018.jpg?width=760" alt="Harry Kane" loading="lazy" decoding="async" />
+                <div class="player-card-meta">
+                  <span>Inghilterra</span>
+                  <strong>Kane</strong>
+                  <small>28-7-1993 | 1,88 m | 86 kg</small>
+                  <em>FC Bayern Munchen (GER)</em>
+                </div>
+              </article>
+              <article class="player-slide spain">
+                <img class="sticker-flag" src="https://flagcdn.com/48x36/es.png" alt="" />
+                <img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/Lamine_Yamal_in_2025.jpg" alt="Lamine Yamal" loading="lazy" decoding="async" />
+                <div class="player-card-meta">
+                  <span>Spagna</span>
+                  <strong>Yamal</strong>
+                  <small>13-7-2007 | 1,80 m | 72 kg</small>
+                  <em>FC Barcelona (ESP)</em>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div class="home-dashboard">
+            <div class="stat-strip" aria-label="Numeri principali">
+              <article>
+                <strong>48</strong>
+                <span>squadre</span>
+              </article>
+              <article>
+                <strong>12</strong>
+                <span>gironi</span>
+              </article>
+              <article>
+                <strong>104</strong>
+                <span>partite</span>
+              </article>
+              <article>
+                <strong>16</strong>
+                <span>stadi</span>
+              </article>
+            </div>
+            <div class="home-side-stack">
+              <article class="daily-news-card" id="dailyNewsCard"></article>
+              <article class="home-pick-card" id="homeBestPick"></article>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="calendar" aria-labelledby="calendar-title">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Partite</p>
+              <h2 id="calendar-title">Calendario</h2>
+            </div>
+            <div class="filters">
+              <label>
+                <span>Fase</span>
+                <select id="stageFilter"></select>
+              </label>
+              <label>
+                <span>Girone</span>
+                <select id="groupFilter"></select>
+              </label>
+              <label>
+                <span>Squadra</span>
+                <select id="teamFilter"></select>
+              </label>
+            </div>
+          </div>
+          <div class="match-list" id="matchList"></div>
+        </section>
+
+        <section class="panel" id="groups" aria-labelledby="groups-title">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Classifiche previste</p>
+              <h2 id="groups-title">Gironi</h2>
+            </div>
+          </div>
+          <div class="group-grid" id="groupGrid"></div>
+        </section>
+
+        <section class="panel" id="teams" aria-labelledby="teams-title">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Statistiche squadra</p>
+              <h2 id="teams-title">Squadre</h2>
+            </div>
+            <div class="filters team-search">
+              <label>
+                <span>Cerca</span>
+                <div class="search-input-shell">
+                  <span class="search-icon" aria-hidden="true"></span>
+                  <input id="teamSearch" type="search" placeholder="Cerca nazionale" />
+                </div>
+              </label>
+              <label>
+                <span>Confederazione</span>
+                <select class="native-confed-select" id="confedFilter"></select>
+                <div class="confed-select" id="confedSelect">
+                  <button class="confed-select-button" id="confedSelectButton" type="button" aria-expanded="false">
+                    <span class="confed-badge confed-all">ALL</span>
+                    <span id="confedSelectLabel">Tutte</span>
+                  </button>
+                  <div class="confed-menu" id="confedMenu"></div>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div class="team-grid" id="teamGrid"></div>
+        </section>
+
+        <section class="panel team-detail-panel" id="teamDetail" aria-labelledby="team-detail-title">
+          <button class="back-button" id="teamDetailBack" type="button">Torna alle squadre</button>
+          <div class="team-detail-hero">
+            <div class="team-detail-title">
+              <img id="teamDetailFlag" alt="" />
+              <div class="team-detail-name">
+                <h2 id="team-detail-title">Dettaglio squadra</h2>
+              </div>
+            </div>
+            <div class="team-detail-score">
+              <span>Indice</span>
+              <strong id="teamDetailRating">0</strong>
+            </div>
+          </div>
+          <div class="team-detail-grid">
+            <article class="detail-block">
+              <h3>Informazioni</h3>
+              <div id="teamDetailInfo"></div>
+            </article>
+            <article class="detail-block">
+              <h3>Calendario</h3>
+              <div id="teamDetailSchedule"></div>
+            </article>
+            <article class="detail-block">
+              <h3>Risultati precedenti</h3>
+              <div id="teamDetailResults"></div>
+            </article>
+            <article class="detail-block">
+              <h3>Miglior marcatore</h3>
+              <div id="teamDetailScorer"></div>
+            </article>
+            <article class="detail-block squad-detail-block">
+              <h3>Convocati</h3>
+              <div id="teamDetailSquad"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel match-detail-panel" id="matchDetail" aria-labelledby="match-detail-title">
+          <button class="back-button" id="matchDetailBack" type="button">Torna al calendario</button>
+          <div id="matchDetailContent"></div>
+        </section>
+
+        <section class="panel" id="predictor" aria-labelledby="predictor-title">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Algoritmo suggerito</p>
+              <h2 id="predictor-title"><span class="analisi-wordmark">Analisi<span class="iq-cluster"><span class="iq-ball-i">I</span>Q</span></span></h2>
+            </div>
+            <div class="filters predictor-controls">
+              <label>
+                <span>Partita</span>
+                <select id="matchPredictSelect"></select>
+              </label>
+            </div>
+          </div>
+          <div class="predictor-layout">
+            <div class="prediction-card" id="predictionCard"></div>
+            <aside class="model-card">
+              <h3>Indice modello</h3>
+              <div class="model-row">
+                <span>Ranking FIFA</span>
+                <strong>42%</strong>
+              </div>
+              <div class="model-row">
+                <span>Forma stimata</span>
+                <strong>24%</strong>
+              </div>
+              <div class="model-row">
+                <span>Attacco / difesa</span>
+                <strong>22%</strong>
+              </div>
+              <div class="model-row">
+                <span>Storia e casa</span>
+                <strong>12%</strong>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="sources-band" aria-label="Fonti dati">
+          <p>
+            Fonti dati: FIFA match schedule, stadi torneo e liste convocati; DIRECTV per orari ET;
+            riepilogo ESPN del ranking FIFA del 1 aprile 2026.
+          </p>
+        </section>
+      </main>
+    </div>
+
+    <script src="data.js?v=17"></script>
+    <script src="app.js?v=28"></script>
+  </body>
+</html>
