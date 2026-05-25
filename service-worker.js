@@ -1,5 +1,5 @@
-const CACHE_NAME = "footballiq-shell-v20";
-const RUNTIME_CACHE = "footballiq-runtime-v20";
+const CACHE_NAME = "footballiq-shell-v38";
+const RUNTIME_CACHE = "footballiq-runtime-v36";
 
 const APP_SHELL = [
   "./",

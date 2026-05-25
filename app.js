@@ -1,4 +1,4 @@
-window.addEventListener("error", (event) => {
+safeAddEventListener(window, "error", (event) => {
   if (event.target && event.target !== window && event.target.tagName === "IMG") {
     return;
   }
@@ -7,6 +7,7 @@ window.addEventListener("error", (event) => {
   document.body.classList.add("app-error");
   if (status) {
     status.textContent = `Errore caricamento: ${event.message || "script non disponibile"}`;
+    status.style.display = "block";
   }
 });
 
@@ -22,11 +23,32 @@ const {
 
 const teamById = new Map(teams.map((team) => [team.id, enrichTeam(team)]));
 const groupLetters = "ABCDEFGHIJKL".split("");
-const mainPanelIds = new Set(["home", "calendar", "groups", "teams", "predictor"]);
+const mainPanelIds = new Set(["home", "calendar", "live", "groups", "teams", "predictor"]);
 const detailPanelIds = new Set(["teamDetail", "matchDetail", "playerDetail"]);
 const routeStorageKey = "footballiq.route.v1";
+const unavailableText = "Dato non disponibile";
+const worldCupSeason = Number(meta.worldCupSeason || 2026);
+const worldCupLeagueIds = new Set(["1", ...(meta.worldCupLeagueIds || []).map(String)]);
+const liveRefreshIntervalMs = 60000;
+let playerSearchIndex = [];
 let timeMode = "rome";
 let playerDetailBackTarget = "home";
+let liveRefreshTimer = null;
+
+const apiFootballState = {
+  checked: false,
+  configured: false,
+  liveLoading: false,
+  liveMatches: [],
+  liveError: "",
+  liveUpdatedAt: "",
+  newsLoading: false,
+  newsItems: [],
+  newsError: "",
+  newsUpdatedAt: "",
+  playerProfiles: new Map(),
+  playerRequests: new Map(),
+};
 
 const playerWatchlist = {
   arg: "Lionel Messi",
@@ -118,7 +140,13 @@ const selectors = {
   groupFilter: document.querySelector("#groupFilter"),
   teamFilter: document.querySelector("#teamFilter"),
   matchList: document.querySelector("#matchList"),
+  liveCenter: document.querySelector("#liveCenter"),
+  liveStatus: document.querySelector("#liveStatus"),
+  liveRefreshButton: document.querySelector("#liveRefreshButton"),
   groupGrid: document.querySelector("#groupGrid"),
+  playerSearchShell: document.querySelector("#playerSearchShell"),
+  playerSearch: document.querySelector("#playerSearch"),
+  playerSearchResults: document.querySelector("#playerSearchResults"),
   teamGrid: document.querySelector("#teamGrid"),
   teamSearch: document.querySelector("#teamSearch"),
   confedFilter: document.querySelector("#confedFilter"),
@@ -150,6 +178,44 @@ const selectors = {
   playerDetailContent: document.querySelector("#playerDetailContent"),
 };
 
+function safeAddEventListener(target, type, handler, options) {
+  if (!target || typeof target.addEventListener !== "function") return false;
+
+  target.addEventListener(type, handler, options);
+  return true;
+}
+
+function hasElements(...elements) {
+  return elements.every(Boolean);
+}
+
+function ensurePlayerDetailPanel() {
+  if (!selectors.playerDetail) {
+    const panel = document.createElement("section");
+    panel.className = "panel player-detail-panel";
+    panel.id = "playerDetail";
+    panel.setAttribute("aria-labelledby", "player-detail-title");
+    panel.innerHTML = `
+      <button class="back-button" id="playerDetailBack" type="button">Torna a Home</button>
+      <div id="playerDetailContent"></div>
+    `;
+
+    const predictorPanel = document.querySelector("#predictor");
+    if (predictorPanel?.parentNode) {
+      predictorPanel.insertAdjacentElement("beforebegin", panel);
+    } else {
+      document.querySelector("main")?.appendChild(panel);
+    }
+  }
+
+  selectors.panels = document.querySelectorAll(".panel");
+  selectors.playerDetail = document.querySelector("#playerDetail");
+  selectors.playerDetailBack = document.querySelector("#playerDetailBack");
+  selectors.playerDetailContent = document.querySelector("#playerDetailContent");
+
+  return hasElements(selectors.playerDetail, selectors.playerDetailBack, selectors.playerDetailContent);
+}
+
 function enrichTeam(team) {
   const rankScore = clamp(101 - team.rank * 0.82, 28, 100);
   const titleBoost = Math.min(team.titles * 3.4, 14);
@@ -169,6 +235,8 @@ function bootstrap() {
   setupAppMode();
   setupGlobalFallbacks();
   hydrateFilters();
+  playerSearchIndex = buildPlayerSearchIndex();
+  ensurePlayerDetailPanel();
   bindEvents();
   renderCalendar();
   renderGroups();
@@ -177,26 +245,34 @@ function bootstrap() {
   applyRouteState();
   renderPrediction();
   renderHomeBestPick();
-  renderDailyNews();
+  renderLiveCenter();
+  try {
+    renderDailyNews();
+  } catch (error) {
+    console.warn("Daily news render skipped", error);
+  }
+
   enhancePlayerCarousel();
-  document.body.classList.remove("is-loading");
+  finishAppLoad();
   const route = getRouteState();
   ensureRouteInUrl(route);
   syncRouteToView({ scroll: false });
+  initializeApiFootball();
 }
 
 function setupAppMode() {
-  const standaloneQuery = window.matchMedia("(display-mode: standalone)");
+  const standaloneQuery =
+    typeof window.matchMedia === "function" ? window.matchMedia("(display-mode: standalone)") : null;
   const updateStandaloneMode = () => {
-    const isStandalone = standaloneQuery.matches || window.navigator.standalone === true;
+    const isStandalone = Boolean(standaloneQuery?.matches || window.navigator.standalone === true);
     document.body.classList.toggle("is-standalone", isStandalone);
   };
 
   updateStandaloneMode();
-  if (standaloneQuery.addEventListener) {
-    standaloneQuery.addEventListener("change", updateStandaloneMode);
-  } else if (standaloneQuery.addListener) {
-    standaloneQuery.addListener(updateStandaloneMode);
+  if (standaloneQuery) {
+    if (!safeAddEventListener(standaloneQuery, "change", updateStandaloneMode) && standaloneQuery.addListener) {
+      standaloneQuery.addListener(updateStandaloneMode);
+    }
   }
 
   const canUseServiceWorker =
@@ -204,14 +280,26 @@ function setupAppMode() {
     (window.isSecureContext || ["localhost", "127.0.0.1"].includes(window.location.hostname));
 
   if (canUseServiceWorker) {
-    window.addEventListener("load", () => {
+    safeAddEventListener(window, "load", () => {
       navigator.serviceWorker.register("./service-worker.js").catch(() => {});
     });
   }
 }
 
 function setupGlobalFallbacks() {
-  document.addEventListener(
+  const watchImage = (image) => {
+    if (!image || image.dataset.fallbackWatched === "true") return;
+    if (!image.getAttribute("src") && !image.currentSrc) return;
+
+    image.dataset.fallbackWatched = "true";
+    safeAddEventListener(image, "error", () => applyImageFallback(image));
+    if (image.complete && image.naturalWidth === 0) {
+      applyImageFallback(image);
+    }
+  };
+
+  safeAddEventListener(
+    document,
     "error",
     (event) => {
       if (event.target && event.target.tagName === "IMG") {
@@ -221,15 +309,26 @@ function setupGlobalFallbacks() {
     true,
   );
 
-  window.addEventListener("unhandledrejection", () => {
+  safeAddEventListener(window, "unhandledrejection", () => {
     showAppNotice("Dati in aggiornamento");
   });
 
-  document.querySelectorAll("img").forEach((image) => {
-    if (image.complete && image.naturalWidth === 0) {
-      applyImageFallback(image);
-    }
-  });
+  document.querySelectorAll("img").forEach(watchImage);
+
+  if (typeof MutationObserver === "function") {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType !== 1) return;
+          if (node.matches?.("img")) {
+            watchImage(node);
+          }
+          node.querySelectorAll?.("img").forEach(watchImage);
+        });
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
 }
 
 function applyImageFallback(image) {
@@ -243,7 +342,7 @@ function applyImageFallback(image) {
   const isTeamFlag =
     image.classList.contains("sticker-flag") ||
     image.closest(".team-tiny, .team-identity-badges, .team-detail-title");
-  placeholder.textContent = isTeamFlag ? "FIQ" : "FootballIQ";
+  placeholder.textContent = isTeamFlag ? "FIQ" : "Foto non disponibile";
   placeholder.setAttribute("aria-hidden", "true");
   image.insertAdjacentElement("afterend", placeholder);
 }
@@ -268,95 +367,639 @@ function showAppNotice(message) {
   status.style.display = "block";
 }
 
+function finishAppLoad() {
+  const status = document.querySelector("#appStatus");
+  document.body.classList.remove("is-loading", "app-error");
+
+  if (status) {
+    status.textContent = "";
+    status.style.display = "";
+  }
+}
+
+function initializeApiFootball() {
+  checkApiFootballStatus()
+    .then(() => {
+      loadLiveCenter();
+      loadFootballNews();
+      window.setTimeout(() => {
+        loadApiFootballTournamentData();
+      }, 12000);
+    })
+    .catch(() => {
+      apiFootballState.newsError = "News API-FOOTBALL non disponibili: proxy locale non configurato o non raggiungibile.";
+      renderDailyNews();
+      renderLiveCenter("API-FOOTBALL non disponibile: uso i dati locali verificati.");
+    });
+
+  startLiveAutoRefresh();
+}
+
+function startLiveAutoRefresh() {
+  if (liveRefreshTimer) return;
+
+  liveRefreshTimer = window.setInterval(() => {
+    if (getVisibleMainPanelId() === "live") {
+      loadLiveCenter({ force: true });
+    }
+  }, liveRefreshIntervalMs);
+}
+
+async function loadFootballNews() {
+  if (!selectors.dailyNewsCard || apiFootballState.newsLoading) return;
+
+  apiFootballState.newsLoading = true;
+  apiFootballState.newsError = "";
+  renderDailyNews();
+
+  try {
+    await checkApiFootballStatus();
+    const response = await fetch("./api-football/news", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.message || "News API-FOOTBALL non disponibili");
+    }
+    apiFootballState.newsItems = (Array.isArray(payload.items) ? payload.items : []).filter(isWorldCupNewsItem);
+    apiFootballState.newsUpdatedAt = payload.generatedAt || new Date().toISOString();
+    apiFootballState.newsError = payload.message || "";
+  } catch (error) {
+    apiFootballState.newsItems = [];
+    apiFootballState.newsError = error?.message || "News API-FOOTBALL non disponibili.";
+  } finally {
+    apiFootballState.newsLoading = false;
+    renderDailyNews();
+  }
+}
+
+async function loadApiFootballTournamentData() {
+  try {
+    const leagues = await apiFootballProxy("leagues", { search: "World Cup" });
+    const worldCup = (leagues || []).find((item) => {
+      const name = normalizePlayerName(item?.league?.name);
+      const hasSeason = (item?.seasons || []).some((season) => Number(season?.year) === 2026);
+      return name.includes("world cup") && hasSeason;
+    });
+
+    const leagueId = worldCup?.league?.id;
+    if (!leagueId) return;
+
+    const [apiTeams, apiFixtures, apiStandings] = await Promise.all([
+      apiFootballProxy("teams", { league: leagueId, season: 2026 }).catch(() => []),
+      apiFootballProxy("fixtures", { league: leagueId, season: 2026 }).catch(() => []),
+      apiFootballProxy("standings", { league: leagueId, season: 2026 }).catch(() => []),
+    ]);
+
+    mergeApiFootballTeams(apiTeams);
+    mergeApiFootballFixtures(apiFixtures);
+    apiFootballState.standings = apiStandings;
+    renderCalendar();
+    renderGroups();
+    renderTeams();
+    renderPredictorOptions();
+    renderPrediction();
+    renderHomeBestPick();
+  } catch (error) {
+    // The static FIFA dataset remains the fallback when API-FOOTBALL has no tournament snapshot.
+  }
+}
+
+function mergeApiFootballTeams(apiTeams = []) {
+  const localByName = new Map();
+  teams.forEach((team) => {
+    localByName.set(normalizePlayerName(team.name), team);
+    localByName.set(normalizePlayerName(team.fifaName), team);
+  });
+
+  apiTeams.forEach((item) => {
+    const apiTeam = item?.team;
+    const local = localByName.get(normalizePlayerName(apiTeam?.name));
+    if (!local || !apiTeam?.id) return;
+
+    local.apiFootballId = apiTeam.id;
+    local.apiFootballName = apiTeam.name || local.apiFootballName;
+    local.apiFootballLogo = apiTeam.logo || local.apiFootballLogo;
+  });
+}
+
+function mergeApiFootballFixtures(apiFixtures = []) {
+  apiFixtures.forEach((item) => {
+    const apiFixture = item?.fixture;
+    const apiTeams = item?.teams || {};
+    const localHome = findTeamByApiName(apiTeams.home?.name);
+    const localAway = findTeamByApiName(apiTeams.away?.name);
+    if (!apiFixture?.id || !localHome || !localAway) return;
+
+    const localFixture = fixtures.find((fixture) => fixture.home === localHome.id && fixture.away === localAway.id);
+    if (!localFixture) return;
+
+    localFixture.apiFootballId = apiFixture.id;
+    localFixture.apiFootballStatus = apiFixture.status || null;
+    if (item.goals && item.goals.home !== null && item.goals.away !== null) {
+      localFixture.score = { home: item.goals.home, away: item.goals.away };
+    }
+  });
+}
+
+function findTeamByApiName(name) {
+  const normalized = normalizePlayerName(name);
+  return teams.find((team) => normalizePlayerName(team.name) === normalized || normalizePlayerName(team.fifaName) === normalized) || null;
+}
+
+async function checkApiFootballStatus() {
+  if (apiFootballState.checked) return apiFootballState.configured;
+
+  const response = await fetch("./api-football/status", { cache: "no-store" });
+  const payload = await response.json();
+  apiFootballState.checked = true;
+  apiFootballState.configured = Boolean(payload?.configured);
+  if (!apiFootballState.configured) {
+    throw new Error("API-FOOTBALL non configurata");
+  }
+  return true;
+}
+
+async function apiFootballProxy(endpoint, params = {}) {
+  await checkApiFootballStatus();
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    search.set(key, String(value));
+  });
+
+  const response = await fetch(`./api-football/v3/${endpoint}${search.toString() ? `?${search}` : ""}`, { cache: "no-store" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.message || "API-FOOTBALL non disponibile");
+  }
+  return payload?.payload?.response || [];
+}
+
+function isWorldCup2026LiveItem(item = {}) {
+  const league = item?.fixture?.league || item?.league || {};
+  const leagueName = normalizePlayerName(league.name);
+  const leagueId = String(league.id || "");
+  const season = Number(league.season || league.year || 0);
+  const isWorldCupLeague = leagueName.includes("world cup") || worldCupLeagueIds.has(leagueId);
+  return isWorldCupLeague && season === worldCupSeason;
+}
+
+function isWorldCupNewsItem(item = {}) {
+  const text = normalizePlayerName(
+    [item.competition, item.tournament, item.tag, item.logoSub, item.title, item.summary].filter(Boolean).join(" "),
+  );
+  return text.includes("mondiali") || text.includes("world cup") || text.includes("fifa");
+}
+
+async function loadLiveCenter(options = {}) {
+  if (!selectors.liveCenter || apiFootballState.liveLoading) return;
+
+  if (!apiFootballState.checked) {
+    try {
+      await checkApiFootballStatus();
+    } catch (error) {
+      renderLiveCenter("API-FOOTBALL non configurata o non raggiungibile.");
+      return;
+    }
+  }
+
+  if (!apiFootballState.configured) {
+    renderLiveCenter("API-FOOTBALL non configurata.");
+    return;
+  }
+
+  apiFootballState.liveLoading = true;
+  apiFootballState.liveError = "";
+  if (options.force || !apiFootballState.liveMatches.length) {
+    renderLiveCenter("Aggiornamento dati live...");
+  }
+
+  try {
+    const response = await fetch("./api-football/live-center", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.message || "Dati live non disponibili");
+    }
+    const liveFixtures = Array.isArray(payload.fixtures) ? payload.fixtures : [];
+    apiFootballState.liveMatches = liveFixtures.filter(isWorldCup2026LiveItem);
+    apiFootballState.liveError = "";
+    apiFootballState.liveUpdatedAt = payload.generatedAt || new Date().toISOString();
+    if (liveFixtures.length && !apiFootballState.liveMatches.length) {
+      apiFootballState.liveError = "API-FOOTBALL ha restituito solo partite fuori Mondiale: ignorate.";
+    }
+    renderLiveCenter();
+  } catch (error) {
+    apiFootballState.liveError = "Nessuna partita live dei Mondiali al momento";
+    apiFootballState.liveMatches = [];
+    apiFootballState.liveLoading = false;
+    renderLiveCenter(apiFootballState.liveError);
+  } finally {
+    apiFootballState.liveLoading = false;
+  }
+}
+
+function primeVisiblePlayerProfiles() {
+  ["messi", "neymar", "ronaldo", "mbappe", "kane", "yamal"].forEach((playerId, index) => {
+    window.setTimeout(() => {
+      const profile = playerProfiles?.[playerId];
+      if (profile) {
+        hydratePlayerProfileFromApi(profile).catch(() => {});
+      }
+    }, 1200 + index * 900);
+  });
+}
+
+async function hydratePlayerProfileFromApi(profile) {
+  if (!profile?.id) return null;
+
+  if (apiFootballState.playerProfiles.has(profile.id)) {
+    const cachedProfile = apiFootballState.playerProfiles.get(profile.id) || null;
+    if (cachedProfile) {
+      applyApiFootballPlayerProfile(profile, cachedProfile);
+      if (selectors.playerDetail?.dataset.playerId === profile.id && selectors.playerDetailContent) {
+        selectors.playerDetailContent.innerHTML = renderPlayerProfile(profile);
+      }
+    }
+    return cachedProfile;
+  }
+
+  if (apiFootballState.playerRequests.has(profile.id)) {
+    return apiFootballState.playerRequests.get(profile.id);
+  }
+
+  const request = resolveApiFootballPlayer(profile)
+    .then((apiProfile) => {
+      if (apiProfile) {
+        applyApiFootballPlayerProfile(profile, apiProfile);
+        apiFootballState.playerProfiles.set(profile.id, apiProfile);
+        if (selectors.playerDetail?.dataset.playerId === profile.id && selectors.playerDetailContent) {
+          selectors.playerDetailContent.innerHTML = renderPlayerProfile(profile);
+        }
+      }
+      return apiProfile;
+    })
+    .finally(() => {
+      apiFootballState.playerRequests.delete(profile.id);
+    });
+
+  apiFootballState.playerRequests.set(profile.id, request);
+  return request;
+}
+
+async function resolveApiFootballPlayer(profile) {
+  await checkApiFootballStatus();
+  const search = new URLSearchParams();
+  search.set("name", profile.fullName || profile.shortName || profile.name || "");
+  search.set("nationality", profile.nationality || "");
+  search.set("season", String(getApiFootballSeason()));
+
+  const response = await fetch(`./api-football/player-profile?${search.toString()}`, { cache: "no-store" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false || !payload?.found) {
+    return null;
+  }
+
+  return payload;
+}
+
+function getApiFootballPlayerSearchTerms(profile) {
+  const terms = [];
+  const addTerm = (term) => {
+    const clean = String(term || "").replace(/\s+/g, " ").trim();
+    if (normalizePlayerName(clean).length < 3) return;
+    if (!terms.some((item) => normalizePlayerName(item) === normalizePlayerName(clean))) {
+      terms.push(clean);
+    }
+  };
+
+  [profile.shortName, ...(profile.aliases || []), profile.fullName].filter(Boolean).forEach((name) => {
+    const clean = String(name).replace(/\s+/g, " ").trim();
+    const tokens = clean.split(" ").filter(Boolean);
+    if (tokens.length <= 1) {
+      addTerm(clean);
+      return;
+    }
+
+    addTerm(tokens[tokens.length - 1]);
+    addTerm(tokens.slice(-2).join(" "));
+    addTerm(tokens.slice(1).join(" "));
+    addTerm(clean);
+  });
+
+  return terms.slice(0, 4);
+}
+
+function findBestApiPlayerCandidate(results, profile) {
+  const profileNames = [profile.fullName, profile.shortName, ...(profile.aliases || [])].map(normalizePlayerName).filter(Boolean);
+  const expectedNation = normalizePlayerName(profile.nationality);
+
+  return (
+    (results || []).find((item) => {
+      const player = item?.player || item;
+      const apiNames = [player?.name, [player?.firstname, player?.lastname].filter(Boolean).join(" ")]
+        .map(normalizePlayerName)
+        .filter(Boolean);
+      const nameMatch = apiNames.some((apiName) =>
+        profileNames.some((profileName) => apiName === profileName || apiName.includes(profileName) || profileName.includes(apiName)),
+      );
+      const nation = normalizePlayerName(player?.nationality || player?.birth?.country);
+      const nationMatch = !expectedNation || !nation || nation === expectedNation;
+      return nameMatch && nationMatch;
+    }) || null
+  );
+}
+
+function applyApiFootballPlayerProfile(profile, apiProfile) {
+  if (apiProfile?.source === "API-FOOTBALL") {
+    applyServerApiFootballPlayerProfile(profile, apiProfile);
+    return;
+  }
+
+  const player = apiProfile.player || {};
+  const statistics = Array.isArray(apiProfile.statistics) ? apiProfile.statistics : [];
+  const currentStats = findCurrentApiPlayerStatistics(statistics);
+  const fullName = [player.firstname, player.lastname].filter(Boolean).join(" ") || player.name;
+
+  profile.fullName = coalesceApiValue(fullName, profile.fullName);
+  profile.birthDate = coalesceApiValue(player.birth?.date, profile.birthDate);
+  profile.height = coalesceApiValue(player.height, profile.height);
+  profile.weight = coalesceApiValue(player.weight, profile.weight);
+  profile.nationality = coalesceApiValue(player.nationality || player.birth?.country, profile.nationality);
+  profile.club = coalesceApiValue(currentStats?.team?.name, profile.club);
+  profile.role = coalesceApiValue(currentStats?.games?.position, profile.role);
+  profile.image = coalescePlayerImage(player.photo, profile.image);
+  profile.stats = mapApiFootballPlayerStats(statistics);
+  profile.apiFootballId = player.id || profile.apiFootballId;
+}
+
+function applyServerApiFootballPlayerProfile(profile, apiProfile) {
+  const player = apiProfile.player || {};
+  const totals = apiProfile.statistics?.totals || {};
+
+  profile.fullName = coalesceApiValue(player.fullName || player.name, profile.fullName);
+  profile.shortName = coalesceApiValue(player.name || player.fullName, profile.shortName || profile.fullName);
+  profile.birthDate = player.birthDate || profile.birthDate || "";
+  profile.age = coalesceApiValue(player.age, profile.age);
+  profile.height = coalesceApiValue(player.height, profile.height);
+  profile.weight = coalesceApiValue(player.weight, profile.weight);
+  profile.nationality = coalesceApiValue(player.nationality || player.birthCountry, profile.nationality);
+  profile.club = coalesceApiValue(player.club, profile.club);
+  profile.role = coalesceApiValue(translateApiPosition(player.role), profile.role);
+  profile.preferredFoot = coalesceApiValue(player.preferredFoot, profile.preferredFoot);
+  profile.image = coalescePlayerImage(player.photo, profile.image);
+  profile.imageAlt = player.fullName || player.name || profile.fullName || "Calciatore";
+  profile.shirtNumber = formatProfileValue(player.shirtNumber);
+  profile.apiFootballId = player.id || profile.apiFootballId;
+  profile.apiFootballUpdatedAt = apiProfile.generatedAt || "";
+  profile.apiFootballSource = apiProfile.source || "API-FOOTBALL";
+  profile.apiTotals = normalizeApiFootballTotals(totals);
+  profile.stats = mapApiFootballPlayerTotals(totals, apiProfile.statistics?.season);
+}
+
+function translateApiPosition(position) {
+  const normalized = normalizePlayerName(position);
+  if (!normalized) return "";
+  if (normalized.includes("goalkeeper")) return "Portiere";
+  if (normalized.includes("defender")) return "Difensore";
+  if (normalized.includes("midfielder")) return "Centrocampista";
+  if (normalized.includes("attacker")) return "Attaccante";
+  return position;
+}
+
+function mapApiFootballPlayerTotals(totals = {}, season) {
+  const rows = [
+    ["Presenze", totals.appearances],
+    ["Gol", totals.goals],
+    ["Assist", totals.assists],
+    ["Minuti", totals.minutes],
+    ["Gialli", totals.yellowCards],
+    ["Rossi", totals.redCards],
+  ];
+  const suffix = season ? ` ${season}` : "";
+
+  return rows.map(([label, value]) => ({
+    label: `${label}${suffix}`,
+    value: value === null || value === undefined ? unavailableText : String(value),
+  }));
+}
+
+function normalizeApiFootballTotals(totals = {}) {
+  return {
+    appearances: totals.appearances ?? unavailableText,
+    goals: totals.goals ?? unavailableText,
+    assists: totals.assists ?? unavailableText,
+    minutes: totals.minutes ?? unavailableText,
+    yellowCards: totals.yellowCards ?? unavailableText,
+    redCards: totals.redCards ?? unavailableText,
+  };
+}
+
+function findCurrentApiPlayerStatistics(statistics = []) {
+  return (
+    statistics.find((item) => Number(item?.games?.appearences || item?.games?.appearances || 0) > 0 && item?.team?.name) ||
+    statistics.find((item) => item?.team?.name) ||
+    null
+  );
+}
+
+function mapApiFootballPlayerStats(statistics = []) {
+  if (!statistics.length) return [];
+
+  const readApiNumber = (...values) => {
+    for (const value of values) {
+      if (value === undefined || value === null || value === "") continue;
+      const number = Number(value);
+      if (Number.isFinite(number)) return number;
+    }
+    return null;
+  };
+
+  const addApiNumber = (acc, key, value) => {
+    if (value === null) return;
+    acc.totals[key] += value;
+    acc.available[key] = true;
+  };
+
+  const totals = statistics.reduce(
+    (acc, item) => {
+      addApiNumber(acc, "appearances", readApiNumber(item?.games?.appearences, item?.games?.appearances));
+      addApiNumber(acc, "goals", readApiNumber(item?.goals?.total));
+      addApiNumber(acc, "assists", readApiNumber(item?.goals?.assists));
+      addApiNumber(acc, "minutes", readApiNumber(item?.games?.minutes));
+      addApiNumber(acc, "yellow", readApiNumber(item?.cards?.yellow));
+      addApiNumber(acc, "red", readApiNumber(item?.cards?.red));
+      return acc;
+    },
+    {
+      totals: { appearances: 0, goals: 0, assists: 0, minutes: 0, yellow: 0, red: 0 },
+      available: { appearances: false, goals: false, assists: false, minutes: false, yellow: false, red: false },
+    },
+  );
+
+  const formatApiTotal = (key) => (totals.available[key] ? String(totals.totals[key]) : unavailableText);
+
+  return [
+    { label: "Presenze club", value: formatApiTotal("appearances") },
+    { label: "Gol club", value: formatApiTotal("goals") },
+    { label: "Assist club", value: formatApiTotal("assists") },
+    { label: "Minuti club", value: formatApiTotal("minutes") },
+    { label: "Gialli club", value: formatApiTotal("yellow") },
+    { label: "Rossi club", value: formatApiTotal("red") },
+  ];
+}
+
+function coalesceApiValue(apiValue, fallbackValue) {
+  const value = formatProfileValue(apiValue);
+  if (value !== unavailableText) return value;
+  return formatProfileValue(fallbackValue);
+}
+
+function coalescePlayerImage(apiValue, fallbackValue) {
+  const value = String(apiValue || "").trim();
+  return value || String(fallbackValue || "").trim();
+}
+
+function getApiFootballSeason() {
+  const now = new Date();
+  const year = now.getFullYear();
+  return now.getMonth() >= 6 ? year : year - 1;
+}
+
 function bindEvents() {
   selectors.tabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      if (tab.dataset.tab === "teams") {
+    safeAddEventListener(tab, "click", () => {
+      if (tab.dataset.tab === "teams" && selectors.teamDetail) {
         delete selectors.teamDetail.dataset.teamId;
       }
       showPanel(tab.dataset.tab, { updateRoute: true });
     });
   });
 
-  window.addEventListener("hashchange", () => {
+  safeAddEventListener(window, "hashchange", () => {
     syncRouteToView({ scroll: false });
   });
-  window.addEventListener("popstate", () => {
+  safeAddEventListener(window, "popstate", () => {
     syncRouteToView({ scroll: false });
   });
 
   [selectors.stageFilter, selectors.groupFilter, selectors.teamFilter].forEach((filter) => {
-    filter.addEventListener("change", renderCalendar);
+    safeAddEventListener(filter, "change", renderCalendar);
   });
 
-  selectors.teamSearch.addEventListener("input", renderTeams);
-  selectors.confedFilter.addEventListener("change", () => {
+  safeAddEventListener(selectors.teamSearch, "input", renderTeams);
+  safeAddEventListener(selectors.confedFilter, "change", () => {
     updateConfedSelect();
     renderTeams();
   });
-  selectors.confedSelectButton.addEventListener("click", () => {
+  safeAddEventListener(selectors.confedSelectButton, "click", () => {
+    if (!selectors.confedSelect) return;
+
     const isOpen = selectors.confedSelect.classList.toggle("is-open");
     selectors.confedSelectButton.setAttribute("aria-expanded", String(isOpen));
   });
-  selectors.confedMenu.addEventListener("click", (event) => {
-    const option = event.target.closest("[data-confed-option]");
-    if (!option) return;
+  safeAddEventListener(selectors.confedMenu, "click", (event) => {
+    const option = event.target.closest?.("[data-confed-option]");
+    if (!option || !selectors.confedFilter || !selectors.confedSelect || !selectors.confedSelectButton) return;
+
     selectors.confedFilter.value = option.dataset.confedOption;
     selectors.confedFilter.dispatchEvent(new Event("change"));
     selectors.confedSelect.classList.remove("is-open");
     selectors.confedSelectButton.setAttribute("aria-expanded", "false");
   });
-  document.addEventListener("click", (event) => {
-    if (!selectors.confedSelect.contains(event.target)) {
+  safeAddEventListener(document, "click", (event) => {
+    if (selectors.confedSelect && !selectors.confedSelect.contains(event.target)) {
       selectors.confedSelect.classList.remove("is-open");
-      selectors.confedSelectButton.setAttribute("aria-expanded", "false");
+      selectors.confedSelectButton?.setAttribute("aria-expanded", "false");
+    }
+
+    if (selectors.playerSearchShell && !selectors.playerSearchShell.contains(event.target)) {
+      closePlayerSearchResults();
     }
   });
-  selectors.matchPredictSelect.addEventListener("change", () => {
+  safeAddEventListener(selectors.playerSearch, "input", updatePlayerSearchResults);
+  safeAddEventListener(selectors.playerSearch, "focus", updatePlayerSearchResults);
+  safeAddEventListener(selectors.playerSearch, "keydown", (event) => {
+    if (event.key === "Escape") {
+      closePlayerSearchResults();
+      selectors.playerSearch.blur();
+      return;
+    }
+
+    if (event.key !== "Enter") return;
+    const firstResult = selectors.playerSearchResults?.querySelector("[data-player-search-index]");
+    if (!firstResult) return;
+
+    event.preventDefault();
+    openPlayerSearchResult(Number(firstResult.dataset.playerSearchIndex));
+  });
+  safeAddEventListener(selectors.playerSearchResults, "click", (event) => {
+    const button = event.target.closest?.("[data-player-search-index]");
+    if (!button) return;
+
+    openPlayerSearchResult(Number(button.dataset.playerSearchIndex));
+  });
+  safeAddEventListener(selectors.matchPredictSelect, "change", () => {
     renderPrediction();
     if (getRouteState().panel === "predictor") {
       updateRoute("predictor");
     }
   });
-  selectors.matchList.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-match-link]");
+  safeAddEventListener(selectors.liveRefreshButton, "click", () => {
+    loadLiveCenter({ force: true });
+  });
+  safeAddEventListener(selectors.matchList, "click", (event) => {
+    const button = event.target.closest?.("[data-match-link]");
     if (button && !button.disabled) {
       openMatchDetail(Number(button.dataset.matchLink));
     }
   });
-  selectors.groupGrid.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-team-link]");
+  safeAddEventListener(selectors.groupGrid, "click", (event) => {
+    const button = event.target.closest?.("[data-team-link]");
     if (button) {
       openTeamDetail(button.dataset.teamLink);
     }
   });
-  selectors.teamGrid.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-team-link]");
+  safeAddEventListener(selectors.teamGrid, "click", (event) => {
+    const button = event.target.closest?.("[data-team-link]");
     if (button) {
       openTeamDetail(button.dataset.teamLink);
     }
   });
-  selectors.teamDetailBack.addEventListener("click", () => {
-    delete selectors.teamDetail.dataset.teamId;
+  safeAddEventListener(selectors.teamDetailBack, "click", () => {
+    if (selectors.teamDetail) {
+      delete selectors.teamDetail.dataset.teamId;
+    }
     showPanel("teams", { updateRoute: true });
   });
-  selectors.matchDetailBack.addEventListener("click", () => showPanel("calendar", { updateRoute: true }));
-  selectors.playerDetailBack.addEventListener("click", () => {
-    showPanel(playerDetailBackTarget, { updateRoute: playerDetailBackTarget === "home" });
+  safeAddEventListener(selectors.matchDetailBack, "click", () => showPanel("calendar", { updateRoute: true }));
+  safeAddEventListener(selectors.playerDetailBack, "click", () => {
+    if (playerDetailBackTarget === "teamDetail") {
+      const teamId = selectors.playerDetail?.dataset.backTeamId || selectors.playerDetail?.dataset.squadTeamId || "";
+      if (teamId && teamById.has(teamId)) {
+        openTeamDetail(teamId, { updateRoute: true });
+        return;
+      }
+
+      showPanel("teams", { updateRoute: true });
+      return;
+    }
+
+    showPanel("home", { updateRoute: true });
   });
-  selectors.teamDetailSquad.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-squad-player]");
+  safeAddEventListener(selectors.teamDetailSquad, "click", (event) => {
+    const button = event.target.closest?.("[data-squad-player]");
     if (!button) return;
     openSquadPlayerDetail(button.dataset.squadPlayer, button.dataset.teamId, button.dataset.role);
   });
-  selectors.timeModeButton.addEventListener("click", () => {
+  safeAddEventListener(selectors.timeModeButton, "click", () => {
     timeMode = timeMode === "rome" ? "et" : "rome";
-    selectors.timeModeLabel.textContent = timeMode === "rome" ? "Italia" : "ET";
+    if (selectors.timeModeLabel) {
+      selectors.timeModeLabel.textContent = timeMode === "rome" ? "Italia" : "ET";
+    }
     renderCalendar();
     renderPrediction();
     renderHomeBestPick();
-    const activePlayerId = selectors.playerDetail.dataset.playerId;
-    if (activePlayerId && playerProfiles?.[activePlayerId]) {
+    const activePlayerId = selectors.playerDetail?.dataset.playerId;
+    if (activePlayerId && playerProfiles?.[activePlayerId] && selectors.playerDetailContent) {
       selectors.playerDetailContent.innerHTML = renderPlayerProfile(playerProfiles[activePlayerId]);
     }
   });
@@ -376,12 +1019,12 @@ function enhancePlayerCarousel() {
   };
 
   slides.forEach((slide) => {
-    slide.addEventListener("click", (event) => {
+    safeAddEventListener(slide, "click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       openSlidePlayer(slide);
     });
-    slide.addEventListener("keydown", (event) => {
+    safeAddEventListener(slide, "keydown", (event) => {
       if (!["Enter", " "].includes(event.key)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -389,13 +1032,13 @@ function enhancePlayerCarousel() {
     });
   });
 
-  carousel.addEventListener("click", (event) => {
-    openSlidePlayer(event.target.closest("[data-player]"));
+  safeAddEventListener(carousel, "click", (event) => {
+    openSlidePlayer(event.target.closest?.("[data-player]"));
   });
 
-  carousel.addEventListener("keydown", (event) => {
+  safeAddEventListener(carousel, "keydown", (event) => {
     if (!["Enter", " "].includes(event.key)) return;
-    const slide = event.target.closest("[data-player]");
+    const slide = event.target.closest?.("[data-player]");
     if (!slide) return;
     event.preventDefault();
     openSlidePlayer(slide);
@@ -434,14 +1077,20 @@ function enhancePlayerCarousel() {
     }
   };
 
-  carousel.addEventListener("scroll", requestUpdate, { passive: true });
-  window.addEventListener("resize", requestUpdate);
+  safeAddEventListener(carousel, "scroll", requestUpdate, { passive: true });
+  safeAddEventListener(window, "resize", requestUpdate);
   updateActiveSlide();
 }
 
 function showPanel(panelId, options = {}) {
   const targetPanelId = mainPanelIds.has(panelId) || detailPanelIds.has(panelId) ? panelId : "home";
   document.body.classList.toggle("home-active", targetPanelId === "home");
+  if (targetPanelId !== "home") {
+    closePlayerSearchResults();
+    if (selectors.playerSearch) {
+      selectors.playerSearch.value = "";
+    }
+  }
   selectors.panels.forEach((panel) => {
     panel.classList.toggle("is-active", panel.id === targetPanelId);
   });
@@ -451,6 +1100,10 @@ function showPanel(panelId, options = {}) {
   }
 
   syncActiveTab(targetPanelId);
+  if (targetPanelId === "live") {
+    startLiveAutoRefresh();
+    loadLiveCenter({ force: true });
+  }
 
   if (options.scroll === false) {
     return;
@@ -469,12 +1122,39 @@ function syncRouteToView(options = {}) {
     return;
   }
 
+  if (route.panel === "playerDetail") {
+    if (route.playerId) {
+      openPlayerDetail(route.playerId, {
+        backTarget: route.backTarget || "home",
+        updateRoute: false,
+        scroll: options.scroll,
+      });
+      return;
+    }
+
+    if (route.squadPlayer && route.teamId) {
+      openSquadPlayerDetail(route.squadPlayer, route.teamId, route.roleGroup || "", {
+        backTarget: route.backTarget || "teamDetail",
+        updateRoute: false,
+        scroll: options.scroll,
+      });
+      return;
+    }
+  }
+
   showPanel(route.panel, { scroll: options.scroll, updateRoute: false });
 }
 
 function syncActiveTab(panelId = getVisibleMainPanelId()) {
   const route = getRouteState();
-  const activePanelId = mainPanelIds.has(panelId) ? panelId : route.panel;
+  const detailBackTarget = route.backTarget === "teamDetail" ? "teams" : route.backTarget;
+  const activePanelId = mainPanelIds.has(panelId)
+    ? panelId
+    : mainPanelIds.has(detailBackTarget)
+      ? detailBackTarget
+      : mainPanelIds.has(route.panel)
+        ? route.panel
+        : "home";
 
   selectors.tabs.forEach((item) => {
     item.classList.toggle("is-active", item.dataset.tab === activePanelId);
@@ -492,14 +1172,59 @@ function getVisibleMainPanelId() {
 
 function getRouteState() {
   const rawHash = window.location.hash.replace(/^#/, "");
-  const route = parseRoute(rawHash || readStoredRoute());
+  const route = rawHash ? parseRoute(rawHash) : readRouteFromSearchParams() || parseRoute(readStoredRoute());
 
   return route;
+}
+
+function readRouteFromSearchParams() {
+  const params = new URLSearchParams(window.location.search || "");
+  const playerId = params.get("player");
+  if (playerId && playerProfiles?.[playerId]) {
+    return {
+      panel: "playerDetail",
+      playerId,
+      matchId: null,
+      teamId: playerProfiles[playerId]?.teamId || null,
+      backTarget: normalizePlayerBackTarget(params.get("from")),
+    };
+  }
+
+  return null;
 }
 
 function parseRoute(value) {
   const [panelPart, queryPart = ""] = String(value || "").replace(/^#/, "").split("?");
   const params = new URLSearchParams(queryPart);
+  const decodedPanel = decodeRouteValue(panelPart);
+  const playerIdFromSlug = decodedPanel.startsWith("player-") ? decodedPanel.slice("player-".length) : "";
+  const playerId = playerIdFromSlug || params.get("player") || "";
+  const backTarget = normalizePlayerBackTarget(params.get("from"));
+
+  if ((decodedPanel === "player" || playerIdFromSlug) && playerId && playerProfiles?.[playerId]) {
+    return {
+      panel: "playerDetail",
+      playerId,
+      matchId: null,
+      teamId: playerProfiles[playerId]?.teamId || null,
+      backTarget,
+    };
+  }
+
+  if (decodedPanel === "squad-player") {
+    const squadPlayer = params.get("name") || "";
+    const teamId = params.get("team");
+    return {
+      panel: squadPlayer && teamId && teamById.has(teamId) ? "playerDetail" : "home",
+      playerId: null,
+      squadPlayer,
+      roleGroup: params.get("role") || "",
+      matchId: null,
+      teamId: teamId && teamById.has(teamId) ? teamId : null,
+      backTarget: backTarget === "home" ? "home" : "teamDetail",
+    };
+  }
+
   const panel = mainPanelIds.has(panelPart) ? panelPart : "home";
   const matchId = Number(params.get("match"));
   const teamId = params.get("team");
@@ -508,7 +1233,20 @@ function parseRoute(value) {
     panel,
     matchId: Number.isFinite(matchId) ? matchId : null,
     teamId: teamId && teamById.has(teamId) ? teamId : null,
+    backTarget: "home",
   };
+}
+
+function decodeRouteValue(value = "") {
+  try {
+    return decodeURIComponent(String(value || ""));
+  } catch (error) {
+    return String(value || "");
+  }
+}
+
+function normalizePlayerBackTarget(value) {
+  return value === "teamDetail" ? "teamDetail" : "home";
 }
 
 function updateRoute(panelId) {
@@ -536,10 +1274,24 @@ function applyRouteState() {
 }
 
 function buildRouteHash(panelId, route = {}) {
+  if (panelId === "playerDetail" && route.playerId && playerProfiles?.[route.playerId]) {
+    const from = normalizePlayerBackTarget(route.backTarget);
+    return `#player-${encodeURIComponent(route.playerId)}${from === "teamDetail" ? "?from=teamDetail" : ""}`;
+  }
+
+  if (panelId === "playerDetail" && route.squadPlayer && route.teamId && teamById.has(route.teamId)) {
+    const params = new URLSearchParams();
+    params.set("team", route.teamId);
+    params.set("name", route.squadPlayer);
+    if (route.roleGroup) params.set("role", route.roleGroup);
+    if (normalizePlayerBackTarget(route.backTarget) === "home") params.set("from", "home");
+    return `#squad-player?${params.toString()}`;
+  }
+
   const targetPanelId = mainPanelIds.has(panelId) ? panelId : "home";
   const params = new URLSearchParams();
 
-  if (targetPanelId === "predictor" && selectors.matchPredictSelect.value) {
+  if (targetPanelId === "predictor" && selectors.matchPredictSelect?.value) {
     params.set("match", selectors.matchPredictSelect.value);
   }
 
@@ -565,6 +1317,37 @@ function updateTeamRoute(teamId) {
   }
 
   syncActiveTab("teams");
+}
+
+function updatePlayerRoute(playerId, backTarget = "home") {
+  if (!playerId || !playerProfiles?.[playerId]) return;
+
+  const nextHash = buildRouteHash("playerDetail", { playerId, backTarget });
+  storeRoute(nextHash);
+
+  if (window.location.hash !== nextHash) {
+    window.history.pushState(null, "", nextHash);
+  }
+
+  syncActiveTab("playerDetail");
+}
+
+function updateSquadPlayerRoute(playerName, teamId, roleGroup = "", backTarget = "teamDetail") {
+  if (!playerName || !teamId || !teamById.has(teamId)) return;
+
+  const nextHash = buildRouteHash("playerDetail", {
+    squadPlayer: playerName,
+    teamId,
+    roleGroup,
+    backTarget,
+  });
+  storeRoute(nextHash);
+
+  if (window.location.hash !== nextHash) {
+    window.history.pushState(null, "", nextHash);
+  }
+
+  syncActiveTab("playerDetail");
 }
 
 function ensureRouteInUrl(route) {
@@ -621,6 +1404,8 @@ function hydrateFilters() {
 }
 
 function fillSelect(select, options) {
+  if (!select) return;
+
   select.innerHTML = options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
 }
 
@@ -638,6 +1423,8 @@ function renderEmptyState(title = "Dati in aggiornamento", message = "Riprova tr
 }
 
 function renderConfedMenu(confeds) {
+  if (!selectors.confedMenu) return;
+
   const options = ["all", ...confeds];
   selectors.confedMenu.innerHTML = options
     .map(
@@ -652,10 +1439,17 @@ function renderConfedMenu(confeds) {
 }
 
 function updateConfedSelect() {
-  const confed = selectors.confedFilter.value || "all";
-  selectors.confedSelectLabel.textContent = confed === "all" ? "Tutte" : confed;
-  selectors.confedSelectButton.querySelector(".confed-badge").outerHTML = renderConfedBadge(confed);
-  selectors.confedMenu.querySelectorAll("[data-confed-option]").forEach((option) => {
+  const confed = selectors.confedFilter?.value || "all";
+  if (selectors.confedSelectLabel) {
+    selectors.confedSelectLabel.textContent = confed === "all" ? "Tutte" : confed;
+  }
+
+  const currentBadge = selectors.confedSelectButton?.querySelector(".confed-badge");
+  if (currentBadge) {
+    currentBadge.outerHTML = renderConfedBadge(confed);
+  }
+
+  selectors.confedMenu?.querySelectorAll("[data-confed-option]").forEach((option) => {
     option.classList.toggle("is-selected", option.dataset.confedOption === confed);
   });
 }
@@ -665,15 +1459,381 @@ function renderConfedBadge(confed) {
   return `<span class="confed-badge confed-${confed.toLowerCase()}">${label}</span>`;
 }
 
+function buildPlayerSearchIndex() {
+  const entries = new Map();
+
+  const addSearchText = (entry, ...parts) => {
+    entry.searchText = normalizePlayerName([entry.searchText, ...parts].filter(Boolean).join(" "));
+  };
+
+  Object.values(playerProfiles || {}).forEach((profile) => {
+    if (!profile?.id) return;
+
+    const team = teamById.get(profile.teamId);
+    const name = profile.fullName || profile.shortName || profile.id;
+    const entry = {
+      type: "profile",
+      profileId: profile.id,
+      name,
+      shortName: profile.shortName || name,
+      teamId: profile.teamId || "",
+      teamName: team?.name || profile.nationality || unavailableText,
+      teamFlag: team?.flag || "",
+      club: profile.club || unavailableText,
+      role: profile.role || unavailableText,
+      image: profile.image || "",
+      imageAlt: profile.imageAlt || name,
+      searchText: "",
+    };
+
+    addSearchText(entry, profile.shortName, profile.fullName, ...(profile.aliases || []), team?.name, team?.fifaName, profile.nationality);
+    entries.set(`profile:${profile.id}`, entry);
+  });
+
+  Object.entries(squads || {}).forEach(([teamId, squad]) => {
+    const team = teamById.get(teamId);
+    Object.entries(squad?.groups || {}).forEach(([roleGroup, players]) => {
+      players.forEach((playerName) => {
+        const availableProfile = findPlayerProfileByName(playerName, teamId);
+        if (availableProfile?.id && entries.has(`profile:${availableProfile.id}`)) {
+          addSearchText(entries.get(`profile:${availableProfile.id}`), playerName, team?.name, team?.fifaName);
+          return;
+        }
+
+        const key = `squad:${teamId}:${normalizePlayerName(playerName)}`;
+        if (entries.has(key)) return;
+
+        const fallback = buildSquadPlayerFallback(playerName, team, normalizeSquadRole(roleGroup));
+        const entry = {
+          type: "squad",
+          playerName,
+          teamId,
+          roleGroup,
+          name: playerName || fallback.name,
+          shortName: playerName || fallback.name,
+          teamName: team?.name || fallback.nationality,
+          teamFlag: team?.flag || "",
+          club: fallback.club,
+          role: normalizeSquadRole(roleGroup),
+          image: "",
+          imageAlt: playerName || "Calciatore",
+          searchText: "",
+        };
+
+        addSearchText(entry, playerName, team?.name, team?.fifaName, fallback.nationality);
+        entries.set(key, entry);
+      });
+    });
+  });
+
+  return [...entries.values()].sort((a, b) => a.name.localeCompare(b.name, "it"));
+}
+
+function updatePlayerSearchResults() {
+  if (!selectors.playerSearch || !selectors.playerSearchResults) return;
+
+  const query = normalizePlayerName(selectors.playerSearch.value);
+  if (query.length < 2) {
+    closePlayerSearchResults();
+    return;
+  }
+
+  const queryWords = query.split(" ").filter(Boolean);
+  const results = playerSearchIndex
+    .map((entry, index) => ({ entry, index, score: getPlayerSearchScore(entry, query, queryWords) }))
+    .filter((result) => result.score > 0)
+    .sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name, "it"))
+    .slice(0, 8);
+
+  selectors.playerSearchResults.hidden = false;
+  selectors.playerSearch.setAttribute("aria-expanded", String(results.length > 0));
+  selectors.playerSearchResults.innerHTML = results.length
+    ? results.map((result) => renderPlayerSearchResult(result.entry, result.index)).join("")
+    : `<div class="player-search-empty">Nessun giocatore trovato</div>`;
+}
+
+function getPlayerSearchScore(entry, query, queryWords) {
+  if (!entry?.searchText) return 0;
+  if (entry.searchText === query) return 100;
+  if (normalizePlayerName(entry.name).startsWith(query)) return 88;
+  if (entry.searchText.includes(query)) return 64;
+  if (queryWords.every((word) => entry.searchText.includes(word))) return 42;
+  return 0;
+}
+
+function renderPlayerSearchResult(entry, index) {
+  const image = entry.image
+    ? `<img src="${escapeAttribute(entry.image)}" alt="${escapeAttribute(entry.imageAlt || entry.name)}" loading="lazy" decoding="async" />`
+    : renderPlayerSearchFallback(entry);
+
+  return `
+    <button class="player-search-result" type="button" data-player-search-index="${index}">
+      ${image}
+      <span>
+        <strong>${escapeHtml(entry.shortName || entry.name)}</strong>
+        <small>${escapeHtml([entry.teamName, entry.club !== unavailableText ? entry.club : "", entry.role].filter(Boolean).join(" - "))}</small>
+      </span>
+    </button>
+  `;
+}
+
+function renderPlayerSearchFallback(entry = {}) {
+  if (entry.teamFlag) {
+    return `<span class="player-search-fallback" aria-hidden="true"><img src="${flagUrl(entry.teamFlag)}" alt="" loading="lazy" /></span>`;
+  }
+
+  return `<span class="player-search-fallback" aria-hidden="true">FIQ</span>`;
+}
+
+function closePlayerSearchResults() {
+  if (selectors.playerSearchResults) {
+    selectors.playerSearchResults.hidden = true;
+    selectors.playerSearchResults.innerHTML = "";
+  }
+
+  selectors.playerSearch?.setAttribute("aria-expanded", "false");
+}
+
+function openPlayerSearchResult(index) {
+  const entry = playerSearchIndex[index];
+  if (!entry) return;
+
+  closePlayerSearchResults();
+  if (selectors.playerSearch) {
+    selectors.playerSearch.value = entry.shortName || entry.name;
+  }
+
+  if (entry.type === "profile" && entry.profileId) {
+    openPlayerDetail(entry.profileId, { backTarget: "home" });
+    return;
+  }
+
+  openSquadPlayerDetail(entry.playerName || entry.name, entry.teamId, entry.roleGroup || entry.role, { backTarget: "home" });
+}
+
+function renderLiveCenter(statusMessage = "") {
+  if (!selectors.liveCenter) return;
+
+  if (selectors.liveStatus) {
+    const updatedAt = apiFootballState.liveUpdatedAt ? ` - aggiornato ${formatLiveUpdateTime(apiFootballState.liveUpdatedAt)}` : "";
+    selectors.liveStatus.textContent = statusMessage || apiFootballState.liveError || `Dati ufficiali Mondiali 2026${updatedAt}`;
+  }
+
+  if (!apiFootballState.configured && apiFootballState.checked) {
+    selectors.liveCenter.innerHTML = renderEmptyState(
+      "Nessuna partita live dei Mondiali al momento",
+      "Il Live Match Center mostra solo partite FIFA World Cup 2026 quando la fonte live e disponibile.",
+    );
+    return;
+  }
+
+  if (apiFootballState.liveLoading && !apiFootballState.liveMatches.length) {
+    selectors.liveCenter.innerHTML = renderEmptyState(
+      "Aggiornamento live",
+      "Sto recuperando solo partite, eventi e statistiche dei Mondiali 2026.",
+    );
+    return;
+  }
+
+  if (apiFootballState.liveError && !apiFootballState.liveMatches.length) {
+    selectors.liveCenter.innerHTML = renderEmptyState(
+      "Nessuna partita live dei Mondiali al momento",
+      "Il Live Match Center mostra solo eventi FIFA World Cup 2026 e non crea risultati fittizi.",
+    );
+    return;
+  }
+
+  if (!apiFootballState.liveMatches.length) {
+    selectors.liveCenter.innerHTML = renderEmptyState(
+      "Nessuna partita live dei Mondiali al momento",
+      "Il Live Match Center mostra solo eventi FIFA World Cup 2026.",
+    );
+    return;
+  }
+
+  selectors.liveCenter.innerHTML = apiFootballState.liveMatches.map(renderLiveMatchCard).join("");
+}
+
+function renderLiveMatchCard(item) {
+  const fixture = item.fixture?.fixture || {};
+  const league = item.fixture?.league || {};
+  const teamsInfo = item.fixture?.teams || {};
+  const goals = item.fixture?.goals || {};
+  const home = teamsInfo.home || {};
+  const away = teamsInfo.away || {};
+  const elapsed = fixture.status?.elapsed ?? fixture.status?.extra ?? unavailableText;
+  const status = fixture.status?.short || fixture.status?.long || unavailableText;
+
+  return `
+    <article class="live-match-card">
+      <div class="live-match-head">
+        <span>${escapeHtml(league.name || unavailableText)}</span>
+        <span class="live-minute">${escapeHtml(elapsed === unavailableText ? status : `${elapsed}'`)}</span>
+      </div>
+      <div class="live-scoreline">
+        <strong>${escapeHtml(home.name || unavailableText)}</strong>
+        <span class="live-score">${escapeHtml(formatLiveGoal(goals.home))} - ${escapeHtml(formatLiveGoal(goals.away))}</span>
+        <strong>${escapeHtml(away.name || unavailableText)}</strong>
+      </div>
+      <div class="live-detail-grid">
+        <section class="live-block">
+          <h3>Marcatori ed eventi</h3>
+          ${renderLiveEvents(item.events)}
+        </section>
+        <section class="live-block">
+          <h3>Statistiche live</h3>
+          ${renderLiveStatistics(item.statistics)}
+        </section>
+        <section class="live-block">
+          <h3>Formazioni ufficiali</h3>
+          ${renderLiveLineups(item.lineups)}
+        </section>
+        <section class="live-block">
+          <h3>Infortuni</h3>
+          ${renderLiveInjuries(item.injuries)}
+        </section>
+        <section class="live-block">
+          <h3>Giocatori</h3>
+          ${renderLivePlayerStats(item.players)}
+        </section>
+      </div>
+    </article>
+  `;
+}
+
+function renderLiveEvents(events = []) {
+  const relevant = (events || []).filter((event) => {
+    const type = normalizePlayerName(event?.type);
+    const detail = normalizePlayerName(event?.detail);
+    return type.includes("goal") || type.includes("card") || type.includes("penalty") || detail.includes("penalty");
+  });
+  if (!relevant.length) return `<div class="live-event-row"><span>Eventi</span><strong>${unavailableText}</strong></div>`;
+
+  return relevant
+    .map((event) => {
+      const label = event.type === "Goal" ? (normalizePlayerName(event.detail).includes("penalty") ? "Rigore" : "Gol") : event.detail || event.type || "Evento";
+      const minute = event.time?.elapsed ? `${event.time.elapsed}'` : unavailableText;
+      const player = event.player?.name || unavailableText;
+      const team = event.team?.name || "";
+      return `<div class="live-event-row"><span>${escapeHtml(minute)} · ${escapeHtml(label)}</span><strong>${escapeHtml([player, team].filter(Boolean).join(" · "))}</strong></div>`;
+    })
+    .join("");
+}
+
+function renderLiveInjuries(injuries = []) {
+  const rows = (injuries || [])
+    .map((injury) => {
+      const player = injury.player?.name || unavailableText;
+      const team = injury.team?.name || "";
+      const type = injury.type || injury.reason || unavailableText;
+      return `<div class="live-event-row"><span>${escapeHtml([player, team].filter(Boolean).join(" - "))}</span><strong>${escapeHtml(type)}</strong></div>`;
+    })
+    .slice(0, 6);
+
+  return rows.length ? rows.join("") : `<div class="live-event-row"><span>Infortuni</span><strong>${unavailableText}</strong></div>`;
+}
+
+function renderLiveStatistics(statistics = []) {
+  if (!statistics?.length) {
+    return `
+      <div class="live-stat-row"><span>Possesso palla</span><strong>${unavailableText}</strong></div>
+      <div class="live-stat-row"><span>Tiri</span><strong>${unavailableText}</strong></div>
+      <div class="live-stat-row"><span>Tiri in porta</span><strong>${unavailableText}</strong></div>
+      <div class="live-stat-row"><span>Expected goals</span><strong>${unavailableText}</strong></div>
+    `;
+  }
+
+  const home = statistics[0];
+  const away = statistics[1];
+  const rows = [
+    ["Possesso palla", "Ball Possession"],
+    ["Tiri", "Total Shots"],
+    ["Tiri in porta", "Shots on Goal"],
+    ["Expected goals", "expected_goals", "Expected Goals"],
+  ];
+
+  return rows
+    .map(([label, ...types]) => {
+      const homeValue = findApiStatistic(home, types);
+      const awayValue = findApiStatistic(away, types);
+      return `<div class="live-stat-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(homeValue)} · ${escapeHtml(awayValue)}</strong></div>`;
+    })
+    .join("");
+}
+
+function renderLiveLineups(lineups = []) {
+  if (!lineups?.length) {
+    return `<div class="live-lineup-head"><span>Formazioni</span><strong>${unavailableText}</strong></div>`;
+  }
+
+  return lineups
+    .map((lineup) => {
+      const starters = (lineup.startXI || [])
+        .map((item) => item?.player?.name)
+        .filter(Boolean)
+        .slice(0, 11);
+      return `
+        <div class="live-lineup-head">
+          <span>${escapeHtml(lineup.team?.name || unavailableText)}</span>
+          <strong>${escapeHtml(lineup.formation || unavailableText)}</strong>
+        </div>
+        <ul class="live-lineup-list">
+          ${starters.length ? starters.map((name) => `<li>${escapeHtml(name)}</li>`).join("") : `<li>${unavailableText}</li>`}
+        </ul>
+      `;
+    })
+    .join("");
+}
+
+function renderLivePlayerStats(players = []) {
+  const rows = (players || [])
+    .flatMap((team) => team.players || [])
+    .map((item) => {
+      const stats = item.statistics?.[0] || {};
+      const goals = stats.goals?.total;
+      const cards = [stats.cards?.yellow ? `${stats.cards.yellow} gialli` : "", stats.cards?.red ? `${stats.cards.red} rossi` : ""]
+        .filter(Boolean)
+        .join(", ");
+      if (!goals && !cards) return "";
+      return `<div class="live-event-row"><span>${escapeHtml(item.player?.name || unavailableText)}</span><strong>${escapeHtml([goals ? `${goals} gol` : "", cards].filter(Boolean).join(" · "))}</strong></div>`;
+    })
+    .filter(Boolean)
+    .slice(0, 8);
+
+  return rows.length ? rows.join("") : `<div class="live-event-row"><span>Statistiche giocatori</span><strong>${unavailableText}</strong></div>`;
+}
+
+function findApiStatistic(teamStats = {}, types = []) {
+  const normalizedTypes = types.map((type) => normalizePlayerName(type));
+  const item = (teamStats.statistics || []).find((stat) => normalizedTypes.includes(normalizePlayerName(stat.type)));
+  return formatProfileValue(item?.value);
+}
+
+function formatLiveGoal(value) {
+  return value === null || value === undefined ? unavailableText : String(value);
+}
+
+function formatLiveUpdateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("it-IT", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: meta.timezoneUser || "Europe/Rome",
+  }).format(date);
+}
+
 function renderCalendar() {
+  if (!selectors.matchList) return;
+
   if (!fixtures.length) {
     selectors.matchList.innerHTML = renderEmptyState("Dati in aggiornamento", "Il calendario verra mostrato appena i dati saranno disponibili.");
     return;
   }
 
-  const stage = selectors.stageFilter.value;
-  const group = selectors.groupFilter.value;
-  const team = selectors.teamFilter.value;
+  const stage = selectors.stageFilter?.value || "all";
+  const group = selectors.groupFilter?.value || "all";
+  const team = selectors.teamFilter?.value || "all";
 
   const filtered = fixtures.filter((fixture) => {
     const stageMatch = stage === "all" || fixture.stage === stage;
@@ -761,6 +1921,8 @@ function getFixtureDate(fixture) {
 }
 
 function renderGroups() {
+  if (!selectors.groupGrid) return;
+
   if (!teams.length) {
     selectors.groupGrid.innerHTML = renderEmptyState("Dati in aggiornamento", "I gironi saranno visibili appena le squadre saranno disponibili.");
     return;
@@ -785,7 +1947,7 @@ function renderGroupCard(group) {
         ${projections
           .map(
             (row, index) => `
-              <button class="standing-row team-link-row" type="button" data-team-link="${row.team.id}">
+              <button class="standing-row team-link-row ${index < 2 ? "is-qualified" : "is-eliminated"}" type="button" data-team-link="${row.team.id}">
                 <span class="position">${index + 1}</span>
                 ${renderTeamTiny(row.team)}
                 <span class="points">${row.points.toFixed(1)} pt</span>
@@ -819,13 +1981,15 @@ function projectGroup(groupTeams) {
 }
 
 function renderTeams() {
+  if (!selectors.teamGrid) return;
+
   if (!teams.length) {
     selectors.teamGrid.innerHTML = renderEmptyState("Dati in aggiornamento", "Le schede squadra saranno visibili appena i dati saranno disponibili.");
     return;
   }
 
-  const search = selectors.teamSearch.value.trim().toLowerCase();
-  const confed = selectors.confedFilter.value;
+  const search = (selectors.teamSearch?.value || "").trim().toLowerCase();
+  const confed = selectors.confedFilter?.value || "all";
   const filtered = teams
     .map((team) => teamById.get(team.id))
     .filter((team) => {
@@ -889,6 +2053,8 @@ function renderMeter(label, value) {
 }
 
 function renderPredictorOptions() {
+  if (!selectors.matchPredictSelect) return;
+
   const groupFixtures = fixtures.filter((fixture) => fixture.home && fixture.away);
   if (!groupFixtures.length) {
     selectors.matchPredictSelect.innerHTML = `<option value="">Partita non disponibile</option>`;
@@ -905,7 +2071,9 @@ function renderPredictorOptions() {
 }
 
 function renderPrediction() {
-  if (!fixtures.length || !selectors.matchPredictSelect.value) {
+  if (!selectors.predictionCard) return;
+
+  if (!fixtures.length || !selectors.matchPredictSelect?.value) {
     selectors.predictionCard.innerHTML = renderEmptyState("Dati in aggiornamento", "AnalisiIQ sara disponibile appena il calendario sara caricato.");
     return;
   }
@@ -965,6 +2133,8 @@ function renderPrediction() {
 }
 
 function renderHomeBestPick() {
+  if (!selectors.homeBestPick) return;
+
   const firstRound = fixtures.filter((fixture) => fixture.id <= 24 && fixture.home && fixture.away);
   if (!firstRound.length) {
     selectors.homeBestPick.innerHTML = renderEmptyState("Dati in aggiornamento", "AnalisiIQ della giornata verra mostrata appena ci saranno partite disponibili.");
@@ -1004,20 +2174,31 @@ function renderHomeBestPick() {
 
 function renderDailyNews() {
   if (!selectors.dailyNewsCard) return;
-  if (!dailyNews.length) {
-    selectors.dailyNewsCard.innerHTML = renderEmptyState("Dati in aggiornamento", "Le news saranno mostrate appena disponibili.");
+
+  const worldCupNews = getWorldCupNewsItems();
+
+  if ((apiFootballState.newsLoading || (!apiFootballState.checked && !apiFootballState.newsError)) && !worldCupNews.length) {
+    selectors.dailyNewsCard.innerHTML = renderEmptyState("Aggiornamento Mondiali", "Sto leggendo solo eventi FIFA World Cup 2026.");
+    return;
+  }
+
+  if (!worldCupNews.length) {
+    selectors.dailyNewsCard.innerHTML = renderEmptyState(
+      "Nessun evento Mondiali",
+      apiFootballState.newsError || "Nessun aggiornamento FIFA World Cup 2026 disponibile al momento.",
+    );
     return;
   }
 
   const today = getLocalDateKey(new Date());
-  const ordered = dailyNews
+  const ordered = worldCupNews
     .slice()
     .sort((a, b) => b.date.localeCompare(a.date) || (b.priority || 0) - (a.priority || 0));
   const mainNews = ordered.find((item) => item.date <= today) || ordered[0];
   const relatedNews = ordered.filter((item) => item.id !== mainNews.id).slice(0, 2);
   const sourceLink = mainNews.url
-    ? `<a href="${mainNews.url}" target="_blank" rel="noopener noreferrer">Fonte ${mainNews.source}</a>`
-    : `<span>${mainNews.source}</span>`;
+    ? `<a href="${escapeAttribute(mainNews.url)}" target="_blank" rel="noopener noreferrer">Fonte ${escapeHtml(mainNews.source)}</a>`
+    : `<span>${escapeHtml(mainNews.source || "FIFA")}</span>`;
 
   const media = renderDailyNewsMedia(mainNews);
 
@@ -1025,19 +2206,18 @@ function renderDailyNews() {
     ${media}
     <div class="daily-news-head">
       <div>
-        <p class="eyebrow">NEWS</p>
+        <p class="eyebrow">${escapeHtml(getDailyNewsLabel(mainNews))}</p>
         <div class="daily-news-time">
-          <span>${formatNewsDate(mainNews.date)}</span>
-          ${mainNews.publishedAgo ? `<span>${mainNews.publishedAgo}</span>` : ""}
+          <span>${escapeHtml(getDailyNewsKicker(mainNews))}</span>
         </div>
       </div>
       <div class="daily-news-badges">
-        ${mainNews.badge ? `<strong class="news-live-badge">${mainNews.badge}</strong>` : ""}
-        <strong>${mainNews.tag}</strong>
+        ${mainNews.badge && isApiFootballNewsItem(mainNews) ? `<strong class="news-live-badge">${escapeHtml(mainNews.badge)}</strong>` : ""}
+        <strong>${escapeHtml(mainNews.tag || "Mondiali 2026")}</strong>
       </div>
     </div>
-    <h2>${mainNews.title}</h2>
-    <p>${mainNews.summary}</p>
+    <h2>${escapeHtml(mainNews.title)}</h2>
+    <p>${escapeHtml(mainNews.summary)}</p>
     <div class="daily-news-actions">
       ${sourceLink}
     </div>
@@ -1047,11 +2227,10 @@ function renderDailyNews() {
             ${relatedNews
               .map(
                 (item) => `
-                  <a href="${item.url}" target="_blank" rel="noopener noreferrer">
+                  <a href="${escapeAttribute(item.url || "#")}" target="_blank" rel="noopener noreferrer">
                     ${renderDailyNewsThumb(item)}
-                    <span>${item.tag}</span>
-                    <strong>${item.title}</strong>
-                    ${item.publishedAgo ? `<small>${item.publishedAgo}</small>` : ""}
+                    <span>${escapeHtml(item.tag || "Mondiali 2026")}</span>
+                    <strong>${escapeHtml(item.title)}</strong>
                   </a>
                 `,
               )
@@ -1064,22 +2243,40 @@ function renderDailyNews() {
 
 function renderDailyNewsMedia(item) {
   if (item.logoText) {
-    return `<div class="daily-news-logo-panel"><strong>${item.logoText}</strong><span>${item.logoSub || "World Cup"}</span></div>`;
+    return `<div class="daily-news-logo-panel"><strong>${escapeHtml(item.logoText)}</strong><span>${escapeHtml(item.logoSub || "World Cup")}</span></div>`;
   }
 
   if (item.image) {
-    return `<div class="daily-news-media"><img src="${item.image}" alt="${item.imageAlt || item.title}" loading="lazy" decoding="async" /></div>`;
+    return `<div class="daily-news-media"><img src="${escapeAttribute(item.image)}" alt="${escapeAttribute(item.imageAlt || item.title)}" loading="lazy" decoding="async" /></div>`;
   }
 
-  return `<div class="daily-news-logo-panel"><strong>NEWS</strong><span>${item.tag || "World Cup"}</span></div>`;
+  return `<div class="daily-news-logo-panel"><strong>NEWS</strong><span>${escapeHtml(item.tag || "World Cup")}</span></div>`;
+}
+
+function getDailyNewsLabel(item = {}) {
+  return isApiFootballNewsItem(item) ? "Evento Mondiali 2026" : "Aggiornamento Mondiali 2026";
+}
+
+function getDailyNewsKicker(item = {}) {
+  return isApiFootballNewsItem(item) ? "Dati live verificati" : "FIFA World Cup 2026";
+}
+
+function isApiFootballNewsItem(item = {}) {
+  return item.source === "API-FOOTBALL";
+}
+
+function getWorldCupNewsItems() {
+  const apiItems = (apiFootballState.newsItems || []).filter(isWorldCupNewsItem);
+  if (apiItems.length) return apiItems;
+  return (dailyNews || []).filter(isWorldCupNewsItem);
 }
 
 function renderDailyNewsThumb(item) {
   if (item.image) {
-    return `<img src="${item.image}" alt="${item.imageAlt || item.title}" loading="lazy" decoding="async" />`;
+    return `<img src="${escapeAttribute(item.image)}" alt="${escapeAttribute(item.imageAlt || item.title)}" loading="lazy" decoding="async" />`;
   }
 
-  return `<span class="daily-news-list-logo">${item.logoText || "NEWS"}</span>`;
+  return `<span class="daily-news-list-logo">${escapeHtml(item.logoText || "NEWS")}</span>`;
 }
 
 function renderAnalisiIQWordmark() {
@@ -1095,17 +2292,6 @@ function getLocalDateKey(date) {
   });
   const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
-function formatNewsDate(value) {
-  if (!value) return "Aggiornamento";
-
-  return new Intl.DateTimeFormat("it-IT", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
 }
 
 function renderPredictionTeam(team, probability, expectedGoal, sign) {
@@ -1246,6 +2432,8 @@ function getPreviousTournamentStats(teamId, fixture) {
 }
 
 function openMatchDetail(fixtureId) {
+  if (!selectors.matchDetailContent) return;
+
   const fixture = fixtures.find((item) => item.id === fixtureId);
   const model = fixture ? buildMatchModel(fixture) : null;
   if (!model) {
@@ -1254,7 +2442,9 @@ function openMatchDetail(fixtureId) {
     return;
   }
 
-  selectors.matchPredictSelect.value = String(fixture.id);
+  if (selectors.matchPredictSelect) {
+    selectors.matchPredictSelect.value = String(fixture.id);
+  }
   selectors.matchDetailContent.innerHTML = renderMatchDetail(model);
   showPanel("matchDetail");
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1362,6 +2552,22 @@ function renderMatchTeamStats(team) {
 }
 
 function openTeamDetail(teamId, options = {}) {
+  if (
+    !hasElements(
+      selectors.teamDetail,
+      selectors.teamDetailFlag,
+      selectors.teamDetailTitle,
+      selectors.teamDetailRating,
+      selectors.teamDetailInfo,
+      selectors.teamDetailSchedule,
+      selectors.teamDetailResults,
+      selectors.teamDetailScorer,
+      selectors.teamDetailSquad,
+    )
+  ) {
+    return;
+  }
+
   const team = teamById.get(teamId);
   if (!team) {
     delete selectors.teamDetail.dataset.teamId;
@@ -1466,66 +2672,137 @@ function renderTeamScorer(team) {
   return `
     <div class="scorer-card">
       <span>Gol nella competizione</span>
-      <strong>0</strong>
-      <p>${player === "Da aggiornare" ? "Miglior marcatore da aggiornare dopo le prime partite." : `Da monitorare: ${player}. Il capocannoniere reale verra aggiornato con i risultati.`}</p>
+      <strong>${unavailableText}</strong>
+      <p>${player === "Da aggiornare" ? "Miglior marcatore disponibile solo quando API-FOOTBALL restituisce dati ufficiali." : `Profilo da verificare via API-FOOTBALL: ${player}. Non vengono inseriti gol fittizi.`}</p>
     </div>
   `;
 }
 
-function openPlayerDetail(playerId) {
+function openPlayerDetail(playerId, options = {}) {
+  if (!ensurePlayerDetailPanel()) return;
+
+  const backTarget = options.backTarget || "home";
+  const backLabel = backTarget === "teamDetail" ? "Torna alla squadra" : "Torna a Home";
   const profile = playerProfiles?.[playerId] || null;
   if (!profile) {
     delete selectors.playerDetail.dataset.playerId;
     delete selectors.playerDetail.dataset.squadPlayer;
-    playerDetailBackTarget = "home";
-    selectors.playerDetailBack.textContent = "Torna alla home";
+    delete selectors.playerDetail.dataset.backTeamId;
+    playerDetailBackTarget = backTarget;
+    selectors.playerDetailBack.textContent = backLabel;
     selectors.playerDetailContent.innerHTML = renderMissingPlayerState();
     showPanel("playerDetail");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (options.scroll !== false) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
     return;
   }
 
   releaseFocusedControl();
-  playerDetailBackTarget = "home";
-  selectors.playerDetailBack.textContent = "Torna alla home";
+  playerDetailBackTarget = backTarget;
+  selectors.playerDetailBack.textContent = backLabel;
   selectors.playerDetail.dataset.playerId = profile.id;
+  selectors.playerDetail.dataset.backTeamId = profile.teamId || "";
   delete selectors.playerDetail.dataset.squadPlayer;
   delete selectors.playerDetail.dataset.squadTeamId;
-  selectors.playerDetailContent.innerHTML = renderPlayerProfile(profile);
+  selectors.playerDetailContent.innerHTML = renderPlayerProfile(buildApiOnlyPlayerProfile(profile, "Caricamento dati API-FOOTBALL..."));
+  if (options.updateRoute !== false) {
+    updatePlayerRoute(profile.id, backTarget);
+  }
   showPanel("playerDetail");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  hydratePlayerProfileFromApi(profile)
+    .then((apiProfile) => {
+      if (!apiProfile && selectors.playerDetail?.dataset.playerId === profile.id && selectors.playerDetailContent) {
+        selectors.playerDetailContent.innerHTML = renderPlayerProfile(
+          buildApiOnlyPlayerProfile(profile, "API-FOOTBALL non ha restituito dati verificabili per questa scheda."),
+        );
+      }
+    })
+    .catch(() => {
+      if (selectors.playerDetail?.dataset.playerId === profile.id && selectors.playerDetailContent) {
+        selectors.playerDetailContent.innerHTML = renderPlayerProfile(
+          buildApiOnlyPlayerProfile(profile, "Dati API-FOOTBALL non disponibili al momento."),
+        );
+      }
+    });
+  if (options.scroll !== false) {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 }
 
-function openSquadPlayerDetail(playerName, teamId, roleGroup) {
+function openSquadPlayerDetail(playerName, teamId, roleGroup, options = {}) {
+  if (!ensurePlayerDetailPanel()) return;
+
   const team = teamById.get(teamId);
   const role = normalizeSquadRole(roleGroup);
   const availableProfile = findPlayerProfileByName(playerName, teamId);
   const fallback = buildSquadPlayerFallback(playerName, team, role);
   const simpleProfile = {
     id: createSquadPlayerKey(teamId, playerName),
+    teamId: teamId || availableProfile?.teamId || "",
     fullName: playerName || fallback.name,
     shortName: playerName || fallback.name,
     birthDate: availableProfile?.birthDate || "",
-    age: availableProfile?.age || fallback.age,
-    height: availableProfile?.height || fallback.height,
-    weight: availableProfile?.weight || fallback.weight,
+    age: preferProfileValue(availableProfile?.age, fallback.age),
+    height: preferProfileValue(availableProfile?.height, fallback.height),
+    weight: preferProfileValue(availableProfile?.weight, fallback.weight),
     nationality: team?.name || fallback.nationality,
-    club: availableProfile?.club || fallback.club,
-    role: availableProfile?.role || role || fallback.role,
+    club: preferProfileValue(availableProfile?.club, fallback.club),
+    role: preferProfileValue(availableProfile?.role, role || fallback.role),
     image: availableProfile?.image || "",
     imageAlt: availableProfile?.imageAlt || playerName || "Calciatore",
-    stats: getWorldCupPlayerStats(availableProfile),
+    preferredFoot: preferProfileValue(availableProfile?.preferredFoot, fallback.preferredFoot),
+    stats: availableProfile ? getWorldCupPlayerStats(availableProfile) : getUnavailablePlayerStats(),
   };
 
   releaseFocusedControl();
-  playerDetailBackTarget = "teamDetail";
-  selectors.playerDetailBack.textContent = "Torna alla squadra";
+  playerDetailBackTarget = options.backTarget || "teamDetail";
+  selectors.playerDetailBack.textContent = playerDetailBackTarget === "home" ? "Torna a Home" : "Torna alla squadra";
   selectors.playerDetail.dataset.squadPlayer = playerName;
   selectors.playerDetail.dataset.squadTeamId = teamId || "";
+  selectors.playerDetail.dataset.backTeamId = teamId || "";
   delete selectors.playerDetail.dataset.playerId;
-  selectors.playerDetailContent.innerHTML = renderSquadPlayerProfile(simpleProfile);
+  selectors.playerDetailContent.innerHTML = renderSquadPlayerProfile(buildApiOnlyPlayerProfile(simpleProfile, "Caricamento dati API-FOOTBALL..."));
+  if (options.updateRoute !== false) {
+    updateSquadPlayerRoute(playerName, teamId, roleGroup, playerDetailBackTarget);
+  }
   showPanel("playerDetail");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  hydrateSquadPlayerProfileFromApi(simpleProfile, playerName, teamId)
+    .then((loaded) => {
+      if (!loaded && selectors.playerDetail?.dataset.squadPlayer === playerName && selectors.playerDetailContent) {
+        selectors.playerDetailContent.innerHTML = renderSquadPlayerProfile(
+          buildApiOnlyPlayerProfile(simpleProfile, "API-FOOTBALL non ha restituito dati verificabili per questa scheda."),
+        );
+      }
+    })
+    .catch(() => {
+      if (selectors.playerDetail?.dataset.squadPlayer === playerName && selectors.playerDetailContent) {
+        selectors.playerDetailContent.innerHTML = renderSquadPlayerProfile(
+          buildApiOnlyPlayerProfile(simpleProfile, "Dati API-FOOTBALL non disponibili al momento."),
+        );
+      }
+    });
+  if (options.scroll !== false) {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+
+async function hydrateSquadPlayerProfileFromApi(profile, playerName, teamId) {
+  if (!profile?.fullName) return false;
+  try {
+    await checkApiFootballStatus();
+  } catch (error) {
+    return false;
+  }
+
+  const apiProfile = await resolveApiFootballPlayer(profile);
+  if (!apiProfile) return false;
+
+  applyApiFootballPlayerProfile(profile, apiProfile);
+  if (selectors.playerDetail?.dataset.squadPlayer === playerName && selectors.playerDetail?.dataset.squadTeamId === (teamId || "")) {
+    selectors.playerDetailContent.innerHTML = renderSquadPlayerProfile(profile);
+  }
+  return true;
 }
 
 function findPlayerProfileByName(playerName, teamId) {
@@ -1555,7 +2832,7 @@ function normalizeSquadRole(roleGroup = "") {
   if (role.includes("difensor")) return "Difensore";
   if (role.includes("centrocamp")) return "Centrocampista";
   if (role.includes("attacc")) return "Attaccante";
-  return roleGroup || "Ruolo da aggiornare";
+  return roleGroup || unavailableText;
 }
 
 function createSquadPlayerKey(teamId, playerName) {
@@ -1563,57 +2840,73 @@ function createSquadPlayerKey(teamId, playerName) {
 }
 
 function buildSquadPlayerFallback(playerName, team, role) {
-  const seed = hashString(`${team?.id || "team"}-${playerName || "player"}-${role || "role"}`);
-  const roleKey = normalizePlayerName(role);
-  const ranges = roleKey.includes("portiere")
-    ? { age: [25, 35], height: [188, 199], weight: [82, 96] }
-    : roleKey.includes("difensore")
-      ? { age: [23, 33], height: [180, 193], weight: [74, 89] }
-      : roleKey.includes("centrocampista")
-        ? { age: [22, 32], height: [174, 187], weight: [68, 82] }
-        : roleKey.includes("attaccante")
-          ? { age: [21, 32], height: [176, 190], weight: [70, 86] }
-          : { age: [22, 33], height: [176, 190], weight: [70, 86] };
-
-  const age = seededRange(seed, ranges.age[0], ranges.age[1]);
-  const heightCm = seededRange(seed >> 3, ranges.height[0], ranges.height[1]);
-  const weightKg = seededRange(seed >> 6, ranges.weight[0], ranges.weight[1]);
-
   return {
-    name: playerName || "Calciatore FootballIQ",
-    age,
-    height: formatHeight(heightCm),
-    weight: `${weightKg} kg`,
-    nationality: team?.name || "Nazionale da confermare",
-    role: role || "Ruolo da confermare",
-    club: "Club da confermare",
+    name: playerName || unavailableText,
+    age: unavailableText,
+    height: unavailableText,
+    weight: unavailableText,
+    nationality: team?.name || unavailableText,
+    role: role || unavailableText,
+    club: unavailableText,
+    preferredFoot: unavailableText,
   };
 }
 
-function hashString(value) {
-  return String(value).split("").reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) >>> 0, 2166136261);
+function preferProfileValue(value, fallbackValue) {
+  if (value === undefined || value === null || value === "" || value === unavailableText) {
+    return fallbackValue ?? unavailableText;
+  }
+
+  return value;
 }
 
-function seededRange(seed, min, max) {
-  return min + (Math.abs(seed) % (max - min + 1));
-}
-
-function formatHeight(heightCm) {
-  const meters = Math.floor(heightCm / 100);
-  const centimeters = String(heightCm % 100).padStart(2, "0");
-  return `${meters},${centimeters} m`;
+function buildApiOnlyPlayerProfile(profile = {}, message = "") {
+  return {
+    id: profile.id,
+    teamId: profile.teamId || "",
+    fullName: profile.fullName || profile.shortName || profile.name || unavailableText,
+    shortName: profile.shortName || profile.fullName || profile.name || unavailableText,
+    birthDate: profile.birthDate || "",
+    age: profile.age || unavailableText,
+    height: profile.height || unavailableText,
+    weight: profile.weight || unavailableText,
+    nationality: profile.nationality || unavailableText,
+    club: profile.club || unavailableText,
+    role: profile.role || unavailableText,
+    preferredFoot: profile.preferredFoot || unavailableText,
+    image: profile.image || "",
+    imageAlt: profile.fullName || profile.shortName || profile.name || "Calciatore",
+    shirtNumber: profile.shirtNumber || unavailableText,
+    apiTotals: getUnavailablePlayerStats(),
+    stats: profile.stats || mapApiFootballPlayerTotals({}),
+    worldCupStats: profile.worldCupStats || getUnavailablePlayerStats(),
+    headline: message,
+  };
 }
 
 function getWorldCupPlayerStats(profile = {}) {
   const safeProfile = profile || {};
-  const stats = safeProfile.worldCupStats || {};
+  const stats = safeProfile.worldCupStats || null;
+  if (!stats) return getUnavailablePlayerStats();
+
   return {
-    appearances: stats.appearances ?? 0,
-    goals: stats.goals ?? 0,
-    assists: stats.assists ?? 0,
-    minutes: stats.minutes ?? 0,
-    yellowCards: stats.yellowCards ?? 0,
-    redCards: stats.redCards ?? 0,
+    appearances: stats.appearances ?? unavailableText,
+    goals: stats.goals ?? unavailableText,
+    assists: stats.assists ?? unavailableText,
+    minutes: stats.minutes ?? unavailableText,
+    yellowCards: stats.yellowCards ?? unavailableText,
+    redCards: stats.redCards ?? unavailableText,
+  };
+}
+
+function getUnavailablePlayerStats() {
+  return {
+    appearances: unavailableText,
+    goals: unavailableText,
+    assists: unavailableText,
+    minutes: unavailableText,
+    yellowCards: unavailableText,
+    redCards: unavailableText,
   };
 }
 
@@ -1623,58 +2916,62 @@ function renderPlayerProfile(profile) {
   }
 
   const team = teamById.get(profile.teamId);
-  const age = calculateAge(profile.birthDate) || profile.age || "In aggiornamento";
+  const age = calculateAge(profile.birthDate) || profile.age || unavailableText;
   const nextFixture = team ? getNextTeamFixture(team.id) : null;
   const nextOpponent = nextFixture && team ? getFixtureOpponentName(nextFixture, team.id) : "";
+  const nationality = isProfileValueAvailable(profile.nationality) ? profile.nationality : team?.name;
   const nationalityFlag = team ? `<img src="${flagUrl(team.flag)}" alt="" loading="lazy" />` : "";
+  const nationalityMarkup = isProfileValueAvailable(nationality)
+    ? `<span class="player-profile-nation">${nationalityFlag}${escapeHtml(nationality)}</span>`
+    : "";
   const description = profile.description || profile.headline || "";
   const worldCupStats = getWorldCupPlayerStats(profile);
+  const shirtNumber = formatProfileValue(profile.shirtNumber);
+  const roleClub = [profile.role, profile.club].filter(isProfileValueAvailable).join(" | ");
+  const bioItems = renderPlayerBioItems([
+    ["Eta", age === unavailableText ? "" : `${age} anni`],
+    ["Altezza", profile.height],
+    ["Peso", profile.weight],
+    ["Nazionalita", nationality],
+    ["Club", profile.club],
+    ["Ruolo", profile.role],
+    ["Piede", profile.preferredFoot],
+  ]);
+  const statItems = renderPlayerStatList(profile.stats || []);
+  const worldCupStatsMarkup = renderWorldCupStatsBlock(worldCupStats);
   const image = profile.image
-    ? `<img src="${escapeAttribute(profile.image)}" alt="${escapeAttribute(profile.imageAlt || profile.fullName || "Calciatore")}" loading="lazy" decoding="async" />`
-    : `<div class="player-profile-initials" aria-hidden="true">${getPlayerInitials(profile.fullName || profile.shortName)}</div>`;
+    ? `<img class="${getPlayerPhotoClass(profile)}" src="${escapeAttribute(profile.image)}" alt="${escapeAttribute(profile.imageAlt || profile.fullName || "Calciatore")}" loading="lazy" decoding="async" />`
+    : renderPlayerProfileFallback(profile);
 
   return `
     <div class="player-profile-card">
       <div class="player-profile-media">
         ${image}
-        <div class="player-profile-shirt" aria-label="Numero ${profile.shirtNumber || ""}">
-          <span>#</span>
-          <strong>${escapeHtml(profile.shirtNumber || "FIQ")}</strong>
-        </div>
+        ${
+          shirtNumber === unavailableText
+            ? ""
+            : `<div class="player-profile-shirt" aria-label="Numero ${escapeAttribute(shirtNumber)}">
+                <span>#</span>
+                <strong>${escapeHtml(shirtNumber)}</strong>
+              </div>`
+        }
       </div>
       <div class="player-profile-content">
         <div class="player-profile-topline">
-          <span class="outcome-label">Player IQ</span>
-          <span class="player-profile-nation">${nationalityFlag}${escapeHtml(profile.nationality || "In aggiornamento")}</span>
+          <span class="outcome-label">Scheda giocatore</span>
+          ${nationalityMarkup}
         </div>
         <div class="player-profile-name">
-          <span>${escapeHtml(profile.shortName || profile.fullName || "In aggiornamento")}</span>
-          <strong id="player-detail-title">${escapeHtml(profile.fullName || profile.shortName || "In aggiornamento")}</strong>
-          <small>${escapeHtml(formatProfileValue(profile.role))} | ${escapeHtml(formatProfileValue(profile.club))}</small>
+          ${isProfileValueAvailable(profile.shortName) ? `<span>${escapeHtml(profile.shortName)}</span>` : ""}
+          <strong id="player-detail-title">${escapeHtml(profile.fullName || profile.shortName || "Calciatore")}</strong>
+          ${roleClub ? `<small>${escapeHtml(roleClub)}</small>` : ""}
         </div>
-        <div class="player-profile-bio-grid">
-          ${renderPlayerBioItem("Eta", age === "In aggiornamento" ? age : `${age} anni`)}
-          ${renderPlayerBioItem("Altezza", profile.height)}
-          ${renderPlayerBioItem("Peso", profile.weight)}
-          ${renderPlayerBioItem("Nazionalita", profile.nationality)}
-          ${renderPlayerBioItem("Club", profile.club)}
-          ${renderPlayerBioItem("Ruolo", profile.role)}
-        </div>
+        ${bioItems ? `<div class="player-profile-bio-grid">${bioItems}</div>` : ""}
         ${description ? `<p class="player-profile-headline">${escapeHtml(description)}</p>` : ""}
-        <div class="player-profile-traits">
-          ${(profile.traits || []).map((trait) => `<span>${escapeHtml(trait)}</span>`).join("")}
-        </div>
-        <div class="player-profile-stat-grid">
-          ${(profile.stats || []).map(renderPlayerStat).join("")}
-        </div>
-        <div class="world-cup-player-stats" aria-label="Statistiche personali Mondiale">
-          ${renderWorldCupPlayerStat("Presenze", worldCupStats.appearances)}
-          ${renderWorldCupPlayerStat("Gol", worldCupStats.goals)}
-          ${renderWorldCupPlayerStat("Assist", worldCupStats.assists)}
-          ${renderWorldCupPlayerStat("Minuti", worldCupStats.minutes)}
-          ${renderWorldCupPlayerStat("Gialli", worldCupStats.yellowCards)}
-          ${renderWorldCupPlayerStat("Rossi", worldCupStats.redCards)}
-        </div>
+        ${profile.traits?.length ? `<div class="player-profile-traits">${profile.traits.map((trait) => `<span>${escapeHtml(trait)}</span>`).join("")}</div>` : ""}
+        ${statItems ? `<div class="player-profile-stat-grid">${statItems}</div>` : ""}
+        ${worldCupStatsMarkup}
+        ${renderPlayerUnavailableNote(profile, Boolean(statItems || worldCupStatsMarkup))}
         ${
           nextFixture
             ? `<div class="player-profile-next">
@@ -1694,11 +2991,22 @@ function renderSquadPlayerProfile(profile) {
     return renderMissingPlayerState();
   }
 
-  const age = calculateAge(profile.birthDate) || profile.age || "In aggiornamento";
-  const stats = profile.stats || getWorldCupPlayerStats();
+  const age = calculateAge(profile.birthDate) || profile.age || unavailableText;
+  const stats = profile.apiTotals || profile.stats || getUnavailablePlayerStats();
+  const roleClub = [profile.role, profile.club].filter(isProfileValueAvailable).join(" | ");
+  const bioItems = renderPlayerBioItems([
+    ["Eta", age === unavailableText ? "" : `${age} anni`],
+    ["Altezza", profile.height],
+    ["Peso", profile.weight],
+    ["Nazionalita", profile.nationality],
+    ["Club", profile.club],
+    ["Ruolo", profile.role],
+    ["Piede", profile.preferredFoot],
+  ]);
+  const worldCupStatsMarkup = renderWorldCupStatsBlock(stats, "Minuti giocati");
   const image = profile.image
-    ? `<img src="${escapeAttribute(profile.image)}" alt="${escapeAttribute(profile.imageAlt || profile.fullName)}" loading="lazy" decoding="async" />`
-    : `<div class="player-profile-initials" aria-hidden="true">${getPlayerInitials(profile.fullName)}</div>`;
+    ? `<img class="${getPlayerPhotoClass(profile)}" src="${escapeAttribute(profile.image)}" alt="${escapeAttribute(profile.imageAlt || profile.fullName)}" loading="lazy" decoding="async" />`
+    : renderPlayerProfileFallback(profile);
 
   return `
     <div class="player-profile-card player-profile-simple-card">
@@ -1707,29 +3015,35 @@ function renderSquadPlayerProfile(profile) {
       </div>
       <div class="player-profile-content">
         <div class="player-profile-name">
-          <span>${escapeHtml(profile.role || "Ruolo")}</span>
+          ${isProfileValueAvailable(profile.role) ? `<span>${escapeHtml(profile.role)}</span>` : ""}
           <strong id="player-detail-title">${escapeHtml(profile.fullName)}</strong>
-          <small>${escapeHtml(formatProfileValue(profile.club))}</small>
+          ${roleClub ? `<small>${escapeHtml(roleClub)}</small>` : ""}
         </div>
-        <div class="player-profile-bio-grid">
-          ${renderPlayerBioItem("Eta", age === "In aggiornamento" ? age : `${age} anni`)}
-          ${renderPlayerBioItem("Altezza", profile.height)}
-          ${renderPlayerBioItem("Peso", profile.weight)}
-          ${renderPlayerBioItem("Nazionalita", profile.nationality)}
-          ${renderPlayerBioItem("Club", profile.club)}
-          ${renderPlayerBioItem("Ruolo", profile.role)}
-        </div>
-        <div class="world-cup-player-stats" aria-label="Statistiche personali Mondiale">
-          ${renderWorldCupPlayerStat("Presenze", stats.appearances)}
-          ${renderWorldCupPlayerStat("Gol", stats.goals)}
-          ${renderWorldCupPlayerStat("Assist", stats.assists)}
-          ${renderWorldCupPlayerStat("Minuti giocati", stats.minutes)}
-          ${renderWorldCupPlayerStat("Gialli", stats.yellowCards)}
-          ${renderWorldCupPlayerStat("Rossi", stats.redCards)}
-        </div>
+        ${bioItems ? `<div class="player-profile-bio-grid">${bioItems}</div>` : ""}
+        ${worldCupStatsMarkup}
+        ${renderPlayerUnavailableNote(profile, Boolean(worldCupStatsMarkup))}
       </div>
     </div>
   `;
+}
+
+function renderPlayerProfileFallback(profile = {}) {
+  const team = teamById.get(profile.teamId);
+  const flag = team?.flag
+    ? `<img class="player-profile-fallback-flag" src="${flagUrl(team.flag)}" alt="" loading="lazy" />`
+    : `<span class="player-profile-fallback-mark">FIQ</span>`;
+
+  return `
+    <div class="player-profile-fallback" aria-label="Foto giocatore non disponibile">
+      ${flag}
+      <span>Foto non disponibile</span>
+    </div>
+  `;
+}
+
+function getPlayerPhotoClass(profile = {}) {
+  const idClass = normalizePlayerName(profile.id || profile.shortName || profile.fullName).replace(/\s+/g, "-");
+  return `player-profile-photo${idClass ? ` player-profile-photo-${escapeAttribute(idClass)}` : ""}`;
 }
 
 function renderMissingPlayerState() {
@@ -1739,38 +3053,93 @@ function renderMissingPlayerState() {
   );
 }
 
+function renderPlayerBioItems(items = []) {
+  return items.map(([label, value]) => renderPlayerBioItem(label, value)).filter(Boolean).join("");
+}
+
 function renderPlayerBioItem(label, value) {
+  if (!isProfileValueAvailable(value)) return "";
+
+  const formattedValue = formatProfileValue(value);
   return `
     <div>
       <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(formatProfileValue(value))}</strong>
+      <strong>${escapeHtml(formattedValue)}</strong>
     </div>
   `;
 }
 
+function renderWorldCupStatsBlock(stats = {}, minutesLabel = "Minuti") {
+  const rows = [
+    ["Presenze", stats.appearances],
+    ["Gol", stats.goals],
+    ["Assist", stats.assists],
+    [minutesLabel, stats.minutes],
+    ["Gialli", stats.yellowCards],
+    ["Rossi", stats.redCards],
+  ]
+    .map(([label, value]) => renderWorldCupPlayerStat(label, value))
+    .filter(Boolean)
+    .join("");
+
+  return rows ? `<div class="world-cup-player-stats" aria-label="Statistiche personali Mondiale">${rows}</div>` : "";
+}
+
 function renderWorldCupPlayerStat(label, value) {
+  if (!isProfileValueAvailable(value)) return "";
+
+  const formattedValue = formatProfileValue(value);
   return `
     <div class="player-stat-item world-cup-stat-item">
       <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(String(value ?? 0))}</strong>
+      <strong>${escapeHtml(formattedValue)}</strong>
     </div>
   `;
+}
+
+function renderPlayerStatList(stats = []) {
+  return stats.map(renderPlayerStat).filter(Boolean).join("");
 }
 
 function renderPlayerStat(stat) {
   if (!stat) return "";
+  if (!isProfileValueAvailable(stat.value)) return "";
+
   const meter = Number.isFinite(Number(stat.meter)) ? clamp(Number(stat.meter), 0, 100) : null;
+  const formattedValue = formatProfileValue(stat.value);
   return `
     <div class="player-stat-item">
       <span>${escapeHtml(stat.label || "Dato")}</span>
-      <strong>${escapeHtml(formatProfileValue(stat.value))}</strong>
+      <strong>${escapeHtml(formattedValue)}</strong>
       ${meter === null ? "" : `<div class="meter-track"><span style="width: ${meter}%"></span></div>`}
     </div>
   `;
 }
 
+function renderPlayerUnavailableNote(profile = {}, hasData = false) {
+  const coreValues = [
+    profile.birthDate || profile.age,
+    profile.height,
+    profile.weight,
+    profile.nationality,
+    profile.club,
+    profile.role,
+    profile.preferredFoot,
+  ];
+  const hasMissingCore = coreValues.some((value) => !isProfileValueAvailable(value));
+  if (!hasMissingCore && hasData) return "";
+
+  return `<p class="player-profile-note">Informazione non disponibile per i campi non mostrati.</p>`;
+}
+
+function isProfileValueAvailable(value) {
+  if (value === null || value === undefined) return false;
+  const text = String(value).trim();
+  return Boolean(text) && text !== unavailableText && text !== "Informazione non disponibile";
+}
+
 function formatProfileValue(value) {
-  return value === null || value === undefined || value === "" ? "In aggiornamento" : String(value);
+  return value === null || value === undefined || value === "" ? unavailableText : String(value);
 }
 
 function getPlayerInitials(name = "") {
@@ -1883,8 +3252,10 @@ try {
 } catch (error) {
   const status = document.querySelector("#appStatus");
   document.body.classList.remove("is-loading");
+
   document.body.classList.add("app-error");
   if (status) {
     status.textContent = `Errore caricamento: ${error.message}`;
+    status.style.display = "block";
   }
 }

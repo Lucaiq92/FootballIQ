@@ -16,7 +16,7 @@
     <link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png" />
     <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
     <link rel="apple-touch-startup-image" href="assets/splash/splash-1170x2532.png" />
-    <link rel="stylesheet" href="styles.css?v=35" />
+    <link rel="stylesheet" href="styles.css?v=45" />
   </head>
   <body class="is-loading home-active">
     <div class="app-status" id="appStatus">Caricamento app...</div>
@@ -42,6 +42,9 @@
           <button class="tab is-active" data-tab="home" type="button">
             Home
           </button>
+          <button class="tab" data-tab="live" type="button">
+            Match Live Center
+          </button>
           <button class="tab" data-tab="calendar" type="button">
             Calendario
           </button>
@@ -56,6 +59,24 @@
           </button>
         </nav>
 
+        <section class="player-search-bar" id="playerSearchShell" aria-label="Cerca giocatore">
+          <label>
+            <span>Cerca giocatore</span>
+            <div class="search-input-shell player-search-input-shell">
+              <span class="search-icon" aria-hidden="true"></span>
+              <input
+                id="playerSearch"
+                type="search"
+                placeholder="Nome giocatore o nazionale"
+                autocomplete="off"
+                aria-expanded="false"
+                aria-controls="playerSearchResults"
+              />
+            </div>
+          </label>
+          <div class="player-search-results" id="playerSearchResults" hidden></div>
+        </section>
+
         <section class="overview-band home-only" aria-label="Home">
           <div class="overview-copy">
             <div class="player-carousel" aria-label="Calciatori rappresentativi">
@@ -65,57 +86,57 @@
                 <div class="player-card-meta">
                   <span>Argentina</span>
                   <strong>Lionel Messi</strong>
-                  <small>24-6-1987 | 1,70 m | 72 kg</small>
+                  <small>24/06/1987 | 1,70 m | Attaccante</small>
                   <em>Inter Miami CF (USA)</em>
                 </div>
               </article>
-              <article class="player-slide brazil">
+              <article class="player-slide brazil" data-player="neymar">
                 <img class="sticker-flag" src="https://flagcdn.com/48x36/br.png" alt="" />
-                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Neymar_Jr._with_Al_Hilal%2C_3_October_2023_-_01.jpg?width=900" alt="Neymar ritratto in primo piano" loading="eager" fetchpriority="high" decoding="async" />
+                <img src="assets/players/neymar-brazil-10.jpg" alt="Neymar con la maglia numero 10 del Brasile" loading="eager" fetchpriority="high" decoding="async" />
                 <div class="player-card-meta">
                   <span>Brasile</span>
                   <strong>Neymar</strong>
-                  <small>5-2-1992 | 1,75 m | 68 kg</small>
+                  <small>05/02/1992 | 1,75 m | Trequartista</small>
                   <em>Santos FC (BRA)</em>
                 </div>
               </article>
-              <article class="player-slide portugal">
+              <article class="player-slide portugal" data-player="ronaldo">
                 <img class="sticker-flag" src="https://flagcdn.com/48x36/pt.png" alt="" />
                 <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Cristiano_Ronaldo_2018.jpg?width=760" alt="Cristiano Ronaldo" loading="lazy" decoding="async" />
                 <div class="player-card-meta">
                   <span>Portogallo</span>
                   <strong>C. Ronaldo</strong>
-                  <small>5-2-1985 | 1,87 m | 83 kg</small>
+                  <small>05/02/1985 | 1,85 m | Attaccante</small>
                   <em>Al Nassr FC (KSA)</em>
                 </div>
               </article>
-              <article class="player-slide france">
+              <article class="player-slide france" data-player="mbappe">
                 <img class="sticker-flag" src="https://flagcdn.com/48x36/fr.png" alt="" />
-                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/2022_FIFA_World_Cup_France_4%E2%80%931_Australia_-_%287%29_%28cropped%29.jpg?width=820" alt="Kylian Mbappe con la Francia" loading="lazy" decoding="async" />
+                <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Kylian_Mbapp%C3%A9_2018.jpg?width=820" alt="Kylian Mbappe con la Francia" loading="lazy" decoding="async" />
                 <div class="player-card-meta">
                   <span>Francia</span>
                   <strong>Kylian Mbappe</strong>
-                  <small>20-12-1998 | 1,78 m | 75 kg</small>
+                  <small>20/12/1998 | 1,78 m | Attaccante</small>
                   <em>Real Madrid CF (ESP)</em>
                 </div>
               </article>
-              <article class="player-slide england">
+              <article class="player-slide england" data-player="kane">
                 <img class="sticker-flag" src="https://flagcdn.com/48x36/gb-eng.png" alt="" />
                 <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Harry_Kane_2018.jpg?width=760" alt="Harry Kane" loading="lazy" decoding="async" />
                 <div class="player-card-meta">
                   <span>Inghilterra</span>
                   <strong>Kane</strong>
-                  <small>28-7-1993 | 1,88 m | 86 kg</small>
+                  <small>28/07/1993 | 1,88 m | Attaccante</small>
                   <em>FC Bayern Munchen (GER)</em>
                 </div>
               </article>
-              <article class="player-slide spain">
+              <article class="player-slide spain" data-player="yamal">
                 <img class="sticker-flag" src="https://flagcdn.com/48x36/es.png" alt="" />
                 <img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/Lamine_Yamal_in_2025.jpg" alt="Lamine Yamal" loading="lazy" decoding="async" />
                 <div class="player-card-meta">
                   <span>Spagna</span>
                   <strong>Yamal</strong>
-                  <small>13-7-2007 | 1,80 m | 72 kg</small>
+                  <small>13/07/2007 | 1,79 m | Ala destra</small>
                   <em>FC Barcelona (ESP)</em>
                 </div>
               </article>
@@ -145,6 +166,18 @@
               <article class="home-pick-card" id="homeBestPick"></article>
             </div>
           </div>
+        </section>
+
+        <section class="panel" id="live" aria-labelledby="live-title">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Mondiali 2026</p>
+              <h2 id="live-title">Match Live Center</h2>
+            </div>
+            <button class="back-button live-refresh-button" id="liveRefreshButton" type="button">Aggiorna live</button>
+          </div>
+          <div class="live-status" id="liveStatus">Connessione ai dati live...</div>
+          <div class="live-center-grid" id="liveCenter"></div>
         </section>
 
         <section class="panel" id="calendar" aria-labelledby="calendar-title">
@@ -289,18 +322,26 @@
               </div>
             </aside>
           </div>
+          <div class="analysis-color-legend" aria-label="Legenda colori AnalisiIQ">
+            <span><i class="legend-dot confidence-low"></i> Bronzo: equilibrio o vantaggio leggero</span>
+            <span><i class="legend-dot confidence-mid"></i> Argento: vantaggio medio</span>
+            <span><i class="legend-dot confidence-high"></i> Oro: indicazione piu forte</span>
+          </div>
         </section>
 
-        <section class="sources-band" aria-label="Fonti dati">
+        <details class="sources-band">
+          <summary>Fonti dati</summary>
           <p>
-            Fonti dati: FIFA match schedule, stadi torneo e liste convocati; DIRECTV per orari ET;
-            riepilogo ESPN del ranking FIFA del 1 aprile 2026.
+            FIFA match schedule, stadi torneo e liste convocati; DIRECTV per orari ET;
+            riepilogo ESPN del ranking FIFA del 1 aprile 2026; profili giocatore da club ufficiali, UEFA e
+            fonti coerenti verificabili; API-FOOTBALL tramite proxy locale filtrato sui Mondiali 2026
+            per live, giocatori, formazioni e statistiche.
           </p>
-        </section>
+        </details>
       </main>
     </div>
 
-    <script src="data.js?v=17"></script>
-    <script src="app.js?v=28"></script>
+    <script src="data.js?v=22"></script>
+    <script src="app.js?v=46"></script>
   </body>
 </html>
