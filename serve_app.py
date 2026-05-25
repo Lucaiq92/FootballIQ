@@ -23,6 +23,7 @@ API_FOOTBALL_ALLOWED_ENDPOINTS = {
     "injuries",
     "leagues",
     "players",
+    "players/topscorers",
     "players/profiles",
     "players/seasons",
     "players/squads",
@@ -35,6 +36,21 @@ LIVE_CENTER_DETAIL_LIMIT = 4
 WORLD_CUP_SEASON = os.environ.get("FOOTBALLIQ_WORLD_CUP_SEASON", "2026")
 DEFAULT_WORLD_CUP_LEAGUE_ID = os.environ.get("FOOTBALLIQ_WORLD_CUP_LEAGUE_ID", "1")
 WORLD_CUP_LEAGUE_ID_CACHE = {"value": DEFAULT_WORLD_CUP_LEAGUE_ID}
+WORLD_CUP_LIVE_STATUS = "1H-HT-2H-ET-P-BT-LIVE"
+WORLD_CUP_GENERAL_TTL = 600
+WORLD_CUP_LIVE_TTL = 45
+WORLD_CUP_DETAIL_TTL = 45
+WORLD_CUP_STATIC_TTL = 1800
+WORLD_CUP_FALLBACK_MESSAGES = {
+    "live": "Dati live Mondiali non disponibili al momento",
+    "standings": "Classifica in aggiornamento",
+    "top_scorers": "Capocannonieri disponibili dopo l'inizio del torneo",
+    "detail": "Dettaglio partita live non disponibile al momento",
+    "statistics": "Statistiche partita in aggiornamento",
+    "events": "Eventi partita in aggiornamento",
+    "lineups": "Formazioni in aggiornamento",
+    "generic": "Dati Mondiali non disponibili al momento",
+}
 
 
 class ApiFootballError(Exception):
@@ -64,7 +80,7 @@ def read_env_value(name):
     return ""
 
 
-API_FOOTBALL_KEY = read_env_value("VITE_API_FOOTBALL_KEY")
+API_FOOTBALL_KEY = read_env_value("API_FOOTBALL_KEY") or read_env_value("VITE_API_FOOTBALL_KEY")
 
 
 def json_response(handler, payload, status=200):
@@ -224,14 +240,113 @@ def world_cup_fixture_params(extra=None):
     return params
 
 
-def is_world_cup_2026_fixture(item):
-    league = item.get("league") or {}
+def utc_now_iso():
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def clean_api_message(scope="generic"):
+    return WORLD_CUP_FALLBACK_MESSAGES.get(scope, WORLD_CUP_FALLBACK_MESSAGES["generic"])
+
+
+def world_cup_success_payload(scope, data=None, message="", **extra):
+    return {
+        "ok": True,
+        "configured": bool(API_FOOTBALL_KEY),
+        "scope": scope,
+        "league": int(resolve_world_cup_league_id()) if str(resolve_world_cup_league_id()).isdigit() else resolve_world_cup_league_id(),
+        "season": int(WORLD_CUP_SEASON) if str(WORLD_CUP_SEASON).isdigit() else WORLD_CUP_SEASON,
+        "generatedAt": utc_now_iso(),
+        "message": message,
+        **(data or {}),
+        **extra,
+    }
+
+
+def world_cup_error_payload(scope, exc=None, data=None, status=None):
+    payload = world_cup_success_payload(scope, data or {}, message=clean_api_message(scope))
+    payload["ok"] = False
+    payload["configured"] = bool(API_FOOTBALL_KEY)
+    if exc:
+        payload["upstreamStatus"] = getattr(exc, "status", status or 502)
+    return payload
+
+
+def fixture_id_from_query(query):
+    params = normalize_query(query)
+    fixture_id = single_param(params, "fixture", "id", "fixtureId")
+    return fixture_id if fixture_id.isdigit() else ""
+
+
+def is_world_cup_league(league):
+    league = league or {}
     league_name = normalize_text(league.get("name"))
     league_id = str(league.get("id") or "")
     league_season = str(league.get("season") or league.get("year") or "")
     cup_ids = {str(DEFAULT_WORLD_CUP_LEAGUE_ID or ""), str(resolve_world_cup_league_id() or "")}
-    is_world_cup = "world cup" in league_name or league_id in cup_ids
-    return is_world_cup and league_season == WORLD_CUP_SEASON
+    return ("world cup" in league_name or league_id in cup_ids) and league_season == WORLD_CUP_SEASON
+
+
+def is_world_cup_2026_fixture(item):
+    return is_world_cup_league(item.get("league") or {})
+
+
+def filter_world_cup_fixtures(rows):
+    return [item for item in rows or [] if is_world_cup_2026_fixture(item)]
+
+
+def fixture_belongs_to_world_cup(fixture_id):
+    if not fixture_id:
+        return False
+    payload = api_football_request("fixtures", {"id": [str(fixture_id)]}, ttl=WORLD_CUP_STATIC_TTL)
+    return any(is_world_cup_2026_fixture(item) for item in payload.get("response") or [])
+
+
+def require_world_cup_fixture(fixture_id):
+    if not fixture_id:
+        raise ApiFootballError(400, "Fixture Mondiali mancante.")
+    if not fixture_belongs_to_world_cup(fixture_id):
+        raise ApiFootballError(404, "Fixture non appartenente ai Mondiali 2026.")
+    return str(fixture_id)
+
+
+def sanitize_world_cup_proxy_params(endpoint, params):
+    params = {key: list(values) for key, values in (params or {}).items()}
+
+    if endpoint == "leagues":
+        return {"id": [resolve_world_cup_league_id()], "season": [WORLD_CUP_SEASON]}
+
+    if endpoint in {"fixtures", "teams", "standings", "players", "players/topscorers", "injuries", "teams/statistics"}:
+        sanitized = {key: values for key, values in params.items() if key not in {"league", "season"}}
+        sanitized.update({"league": [resolve_world_cup_league_id()], "season": [WORLD_CUP_SEASON]})
+        return sanitized
+
+    if endpoint in {"fixtures/events", "fixtures/statistics", "fixtures/lineups", "fixtures/players"}:
+        fixture_id = single_param(params, "fixture", "id", "fixtureId")
+        require_world_cup_fixture(fixture_id)
+        return {"fixture": [fixture_id]}
+
+    return params
+
+
+def sanitize_world_cup_proxy_payload(endpoint, payload):
+    if endpoint == "fixtures":
+        payload = dict(payload)
+        payload["response"] = filter_world_cup_fixtures(payload.get("response") or [])
+        payload["results"] = len(payload["response"])
+        return payload
+
+    if endpoint in {"standings", "players/topscorers", "teams", "players", "injuries", "teams/statistics"}:
+        payload = dict(payload)
+        response = []
+        for item in payload.get("response") or []:
+            league = item.get("league") if isinstance(item, dict) else None
+            if not league or is_world_cup_league(league):
+                response.append(item)
+        payload["response"] = response
+        payload["results"] = len(response)
+        return payload
+
+    return payload
 
 
 def season_candidates():
@@ -554,7 +669,11 @@ def handle_api_football_news(handler, query):
     today = single_param(params, "date") or datetime.utcnow().strftime("%Y-%m-%d")
     items = []
     try:
-        live = api_football_request("fixtures", world_cup_fixture_params({"live": ["all"]}), ttl=30).get("response") or []
+        live = api_football_request(
+            "fixtures",
+            world_cup_fixture_params({"status": [WORLD_CUP_LIVE_STATUS]}),
+            ttl=WORLD_CUP_LIVE_TTL,
+        ).get("response") or []
         live = [item for item in live if is_world_cup_2026_fixture(item)]
         items.extend(fixture_news_item(item, priority=5) for item in live[:3])
 
@@ -578,7 +697,7 @@ def handle_api_football_news(handler, query):
                 "ok": True,
                 "generatedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
                 "items": items[:5],
-                "message": "" if items else "Nessun evento live dei Mondiali 2026 disponibile da API-FOOTBALL.",
+                "message": "" if items else "Dati live Mondiali non disponibili al momento",
             },
         )
     except ApiFootballError as exc:
@@ -588,20 +707,163 @@ def handle_api_football_news(handler, query):
                 "ok": False,
                 "generatedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
                 "items": [],
-                "message": exc.message,
+                "message": "Dati live Mondiali non disponibili al momento",
                 "upstreamStatus": exc.status,
             },
         )
 
 
+def enrich_world_cup_fixture(item, include_detail=True):
+    fixture_id = item.get("fixture", {}).get("id")
+    detail = {"fixture": item, "events": [], "statistics": [], "lineups": [], "players": [], "injuries": []}
+    if not include_detail or not fixture_id:
+        return detail
+
+    for endpoint, key in (
+        ("fixtures/events", "events"),
+        ("fixtures/statistics", "statistics"),
+        ("fixtures/lineups", "lineups"),
+        ("fixtures/players", "players"),
+        ("injuries", "injuries"),
+    ):
+        params = {"fixture": [str(fixture_id)]}
+        if endpoint == "injuries":
+            params = world_cup_fixture_params({"fixture": [str(fixture_id)]})
+        try:
+            payload = api_football_request(endpoint, params, ttl=WORLD_CUP_DETAIL_TTL)
+            detail[key] = payload.get("response") or []
+        except ApiFootballError:
+            detail[key] = []
+    return detail
+
+
+def handle_api_football_world_cup_live(handler, query):
+    try:
+        fixture_params = world_cup_fixture_params({"status": [WORLD_CUP_LIVE_STATUS]})
+        fixtures_payload = api_football_request("fixtures", fixture_params, ttl=WORLD_CUP_LIVE_TTL)
+        fixtures = filter_world_cup_fixtures(fixtures_payload.get("response") or [])
+        enriched = [
+            enrich_world_cup_fixture(item, include_detail=index < LIVE_CENTER_DETAIL_LIMIT)
+            for index, item in enumerate(fixtures[:12])
+        ]
+        json_response(
+            handler,
+            world_cup_success_payload(
+                "live",
+                {"fixtures": enriched, "detailLimit": LIVE_CENTER_DETAIL_LIMIT},
+                message="" if enriched else clean_api_message("live"),
+            ),
+        )
+    except ApiFootballError as exc:
+        json_response(handler, world_cup_error_payload("live", exc, {"fixtures": []}))
+
+
+def handle_api_football_world_cup_fixture_detail(handler, query):
+    fixture_id = fixture_id_from_query(query)
+    try:
+        require_world_cup_fixture(fixture_id)
+        fixture_payload = api_football_request("fixtures", {"id": [fixture_id]}, ttl=WORLD_CUP_DETAIL_TTL)
+        fixtures = filter_world_cup_fixtures(fixture_payload.get("response") or [])
+        detail = enrich_world_cup_fixture(fixtures[0], include_detail=True) if fixtures else None
+        json_response(
+            handler,
+            world_cup_success_payload(
+                "detail",
+                {"fixture": detail},
+                message="" if detail else clean_api_message("detail"),
+            ),
+        )
+    except ApiFootballError as exc:
+        json_response(handler, world_cup_error_payload("detail", exc, {"fixture": None}))
+
+
+def handle_api_football_world_cup_fixture_collection(handler, query, endpoint, scope, key):
+    fixture_id = fixture_id_from_query(query)
+    try:
+        require_world_cup_fixture(fixture_id)
+        payload = api_football_request(endpoint, {"fixture": [fixture_id]}, ttl=WORLD_CUP_DETAIL_TTL)
+        rows = payload.get("response") or []
+        json_response(
+            handler,
+            world_cup_success_payload(scope, {key: rows}, message="" if rows else clean_api_message(scope)),
+        )
+    except ApiFootballError as exc:
+        json_response(handler, world_cup_error_payload(scope, exc, {key: []}))
+
+
+def handle_api_football_world_cup_standings(handler, query):
+    try:
+        payload = api_football_request("standings", world_cup_fixture_params(), ttl=WORLD_CUP_GENERAL_TTL)
+        rows = [item for item in payload.get("response") or [] if is_world_cup_league(item.get("league") or {})]
+        json_response(
+            handler,
+            world_cup_success_payload("standings", {"standings": rows}, message="" if rows else clean_api_message("standings")),
+        )
+    except ApiFootballError as exc:
+        json_response(handler, world_cup_error_payload("standings", exc, {"standings": []}))
+
+
+def handle_api_football_world_cup_top_scorers(handler, query):
+    try:
+        payload = api_football_request("players/topscorers", world_cup_fixture_params(), ttl=WORLD_CUP_GENERAL_TTL)
+        rows = payload.get("response") or []
+        json_response(
+            handler,
+            world_cup_success_payload(
+                "top_scorers",
+                {"scorers": rows},
+                message="" if rows else clean_api_message("top_scorers"),
+            ),
+        )
+    except ApiFootballError as exc:
+        json_response(handler, world_cup_error_payload("top_scorers", exc, {"scorers": []}))
+
+
+def handle_api_football_world_cup_bootstrap(handler, query):
+    data = {"teams": [], "fixtures": [], "standings": [], "topScorers": []}
+    messages = {}
+
+    calls = (
+        ("teams", "teams", world_cup_fixture_params(), WORLD_CUP_STATIC_TTL, "generic"),
+        ("fixtures", "fixtures", world_cup_fixture_params(), WORLD_CUP_STATIC_TTL, "generic"),
+        ("standings", "standings", world_cup_fixture_params(), WORLD_CUP_GENERAL_TTL, "standings"),
+        ("players/topscorers", "topScorers", world_cup_fixture_params(), WORLD_CUP_GENERAL_TTL, "top_scorers"),
+    )
+
+    for endpoint, key, params, ttl, scope in calls:
+        try:
+            payload = api_football_request(endpoint, params, ttl=ttl)
+            rows = payload.get("response") or []
+            if endpoint == "fixtures":
+                rows = filter_world_cup_fixtures(rows)
+            if endpoint == "standings":
+                rows = [item for item in rows if is_world_cup_league(item.get("league") or {})]
+            data[key] = rows
+            if not rows:
+                messages[key] = clean_api_message(scope)
+        except ApiFootballError:
+            data[key] = []
+            messages[key] = clean_api_message(scope)
+
+    json_response(
+        handler,
+        world_cup_success_payload(
+            "bootstrap",
+            data,
+            messages=messages,
+            message="" if any(data.values()) else clean_api_message("generic"),
+        ),
+    )
+
+
 def handle_api_football_live_center(handler, query):
     params = normalize_query(query)
-    fixture_params = world_cup_fixture_params({"live": ["all"]})
+    fixture_params = world_cup_fixture_params({"status": [WORLD_CUP_LIVE_STATUS]})
     if "date" in params:
         fixture_params = world_cup_fixture_params({"date": params["date"][:1]})
 
     try:
-        fixtures_payload = api_football_request("fixtures", fixture_params, ttl=20)
+        fixtures_payload = api_football_request("fixtures", fixture_params, ttl=WORLD_CUP_LIVE_TTL)
         fixtures = [item for item in fixtures_payload.get("response") or [] if is_world_cup_2026_fixture(item)]
         enriched = []
         errors = []
@@ -617,7 +879,10 @@ def handle_api_football_live_center(handler, query):
                     ("injuries", "injuries"),
                 ):
                     try:
-                        payload = api_football_request(endpoint, {"fixture": [str(fixture_id)]}, ttl=30)
+                        detail_params = {"fixture": [str(fixture_id)]}
+                        if endpoint == "injuries":
+                            detail_params = world_cup_fixture_params({"fixture": [str(fixture_id)]})
+                        payload = api_football_request(endpoint, detail_params, ttl=WORLD_CUP_DETAIL_TTL)
                         detail[key] = payload.get("response") or []
                     except ApiFootballError as exc:
                         errors.append({"fixture": fixture_id, "endpoint": endpoint, "status": exc.status, "message": exc.message})
@@ -632,13 +897,13 @@ def handle_api_football_live_center(handler, query):
                 "fixtures": enriched,
                 "errors": errors,
                 "detailLimit": LIVE_CENTER_DETAIL_LIMIT,
-                "message": "Nessuna partita live dei Mondiali al momento" if not enriched else "",
+                "message": clean_api_message("live") if not enriched else "",
             },
         )
     except ApiFootballError as exc:
         json_response(
             handler,
-            {"ok": False, "configured": bool(API_FOOTBALL_KEY), "message": exc.message, "fixtures": []},
+            {"ok": False, "configured": bool(API_FOOTBALL_KEY), "message": clean_api_message("live"), "fixtures": []},
         )
 
 
@@ -660,6 +925,56 @@ class QuietHandler(SimpleHTTPRequestHandler):
             handle_api_football_live_center(self, parsed.query)
             return
 
+        if parsed.path == "/api-football/world-cup/live":
+            handle_api_football_world_cup_live(self, parsed.query)
+            return
+
+        if parsed.path == "/api-football/world-cup/bootstrap":
+            handle_api_football_world_cup_bootstrap(self, parsed.query)
+            return
+
+        if parsed.path == "/api-football/world-cup/fixture":
+            handle_api_football_world_cup_fixture_detail(self, parsed.query)
+            return
+
+        if parsed.path == "/api-football/world-cup/events":
+            handle_api_football_world_cup_fixture_collection(
+                self,
+                parsed.query,
+                "fixtures/events",
+                "events",
+                "events",
+            )
+            return
+
+        if parsed.path == "/api-football/world-cup/statistics":
+            handle_api_football_world_cup_fixture_collection(
+                self,
+                parsed.query,
+                "fixtures/statistics",
+                "statistics",
+                "statistics",
+            )
+            return
+
+        if parsed.path == "/api-football/world-cup/lineups":
+            handle_api_football_world_cup_fixture_collection(
+                self,
+                parsed.query,
+                "fixtures/lineups",
+                "lineups",
+                "lineups",
+            )
+            return
+
+        if parsed.path == "/api-football/world-cup/standings":
+            handle_api_football_world_cup_standings(self, parsed.query)
+            return
+
+        if parsed.path == "/api-football/world-cup/top-scorers":
+            handle_api_football_world_cup_top_scorers(self, parsed.query)
+            return
+
         if parsed.path == "/api-football/player-profile":
             handle_api_football_player_profile(self, parsed.query)
             return
@@ -672,10 +987,20 @@ class QuietHandler(SimpleHTTPRequestHandler):
             endpoint = parsed.path.removeprefix("/api-football/v3/").strip("/")
             params = normalize_query(parsed.query)
             try:
+                params = sanitize_world_cup_proxy_params(endpoint, params)
                 payload = api_football_request(endpoint, params)
+                payload = sanitize_world_cup_proxy_payload(endpoint, payload)
                 json_response(self, {"ok": True, "endpoint": endpoint, "payload": payload})
             except ApiFootballError as exc:
-                json_response(self, {"ok": False, "message": exc.message, "endpoint": endpoint, "upstreamStatus": exc.status})
+                json_response(
+                    self,
+                    {
+                        "ok": False,
+                        "message": clean_api_message("generic"),
+                        "endpoint": endpoint,
+                        "upstreamStatus": exc.status,
+                    },
+                )
             return
 
         super().do_GET()

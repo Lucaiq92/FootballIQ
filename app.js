@@ -30,10 +30,12 @@ const unavailableText = "Dato non disponibile";
 const worldCupSeason = Number(meta.worldCupSeason || 2026);
 const worldCupLeagueIds = new Set(["1", ...(meta.worldCupLeagueIds || []).map(String)]);
 const liveRefreshIntervalMs = 60000;
+const tournamentRefreshIntervalMs = 600000;
 let playerSearchIndex = [];
 let timeMode = "rome";
 let playerDetailBackTarget = "home";
 let liveRefreshTimer = null;
+let tournamentRefreshTimer = null;
 
 const apiFootballState = {
   checked: false,
@@ -42,6 +44,12 @@ const apiFootballState = {
   liveMatches: [],
   liveError: "",
   liveUpdatedAt: "",
+  tournamentLoading: false,
+  standings: [],
+  standingsError: "",
+  topScorers: [],
+  topScorersError: "",
+  tournamentUpdatedAt: "",
   newsLoading: false,
   newsItems: [],
   newsError: "",
@@ -141,6 +149,7 @@ const selectors = {
   teamFilter: document.querySelector("#teamFilter"),
   matchList: document.querySelector("#matchList"),
   liveCenter: document.querySelector("#liveCenter"),
+  liveTournamentData: document.querySelector("#liveTournamentData"),
   liveStatus: document.querySelector("#liveStatus"),
   liveRefreshButton: document.querySelector("#liveRefreshButton"),
   groupGrid: document.querySelector("#groupGrid"),
@@ -281,7 +290,7 @@ function setupAppMode() {
 
   if (canUseServiceWorker) {
     safeAddEventListener(window, "load", () => {
-      navigator.serviceWorker.register("./service-worker.js?v=51").catch(() => {});
+      navigator.serviceWorker.register("./service-worker.js?v=59").catch(() => {});
     });
   }
 }
@@ -378,21 +387,24 @@ function finishAppLoad() {
 }
 
 function initializeApiFootball() {
+  renderLiveTournamentData();
   checkApiFootballStatus()
     .then(() => {
       loadLiveCenter();
       loadFootballNews();
-      window.setTimeout(() => {
-        loadApiFootballTournamentData();
-      }, 12000);
+      loadApiFootballTournamentData();
     })
     .catch(() => {
-      apiFootballState.newsError = "News API-FOOTBALL non disponibili: proxy locale non configurato o non raggiungibile.";
+      apiFootballState.newsError = "Dati live Mondiali non disponibili al momento";
+      apiFootballState.standingsError = "Classifica in aggiornamento";
+      apiFootballState.topScorersError = "Capocannonieri disponibili dopo l'inizio del torneo";
       renderDailyNews();
-      renderLiveCenter("API-FOOTBALL non disponibile: uso i dati locali verificati.");
+      renderLiveCenter("Dati live Mondiali non disponibili al momento");
+      renderLiveTournamentData();
     });
 
   startLiveAutoRefresh();
+  startTournamentAutoRefresh();
 }
 
 function startLiveAutoRefresh() {
@@ -403,6 +415,14 @@ function startLiveAutoRefresh() {
       loadLiveCenter({ force: true });
     }
   }, liveRefreshIntervalMs);
+}
+
+function startTournamentAutoRefresh() {
+  if (tournamentRefreshTimer) return;
+
+  tournamentRefreshTimer = window.setInterval(() => {
+    loadApiFootballTournamentData({ background: true });
+  }, tournamentRefreshIntervalMs);
 }
 
 async function loadFootballNews() {
@@ -431,35 +451,48 @@ async function loadFootballNews() {
   }
 }
 
-async function loadApiFootballTournamentData() {
+async function loadApiFootballTournamentData(options = {}) {
+  if (apiFootballState.tournamentLoading) return;
+
+  apiFootballState.tournamentLoading = true;
+  if (!options.background) {
+    renderLiveTournamentData();
+  }
+
   try {
-    const leagues = await apiFootballProxy("leagues", { search: "World Cup" });
-    const worldCup = (leagues || []).find((item) => {
-      const name = normalizePlayerName(item?.league?.name);
-      const hasSeason = (item?.seasons || []).some((season) => Number(season?.year) === 2026);
-      return name.includes("world cup") && hasSeason;
-    });
+    await checkApiFootballStatus();
+    const response = await fetch("./api-football/world-cup/bootstrap", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.message || "Dati Mondiali non disponibili al momento");
+    }
 
-    const leagueId = worldCup?.league?.id;
-    if (!leagueId) return;
-
-    const [apiTeams, apiFixtures, apiStandings] = await Promise.all([
-      apiFootballProxy("teams", { league: leagueId, season: 2026 }).catch(() => []),
-      apiFootballProxy("fixtures", { league: leagueId, season: 2026 }).catch(() => []),
-      apiFootballProxy("standings", { league: leagueId, season: 2026 }).catch(() => []),
-    ]);
+    const apiTeams = Array.isArray(payload.teams) ? payload.teams : [];
+    const apiFixtures = Array.isArray(payload.fixtures) ? payload.fixtures : [];
+    const apiStandings = Array.isArray(payload.standings) ? payload.standings : [];
+    const topScorers = Array.isArray(payload.topScorers) ? payload.topScorers : [];
 
     mergeApiFootballTeams(apiTeams);
     mergeApiFootballFixtures(apiFixtures);
     apiFootballState.standings = apiStandings;
+    apiFootballState.topScorers = topScorers;
+    apiFootballState.standingsError = payload.messages?.standings || (!apiStandings.length ? "Classifica in aggiornamento" : "");
+    apiFootballState.topScorersError =
+      payload.messages?.topScorers || (!topScorers.length ? "Capocannonieri disponibili dopo l'inizio del torneo" : "");
+    apiFootballState.tournamentUpdatedAt = payload.generatedAt || new Date().toISOString();
     renderCalendar();
     renderGroups();
     renderTeams();
     renderPredictorOptions();
     renderPrediction();
     renderHomeBestPick();
+    renderLiveTournamentData();
   } catch (error) {
-    // The static FIFA dataset remains the fallback when API-FOOTBALL has no tournament snapshot.
+    apiFootballState.standingsError = "Classifica in aggiornamento";
+    apiFootballState.topScorersError = "Capocannonieri disponibili dopo l'inizio del torneo";
+  } finally {
+    apiFootballState.tournamentLoading = false;
+    renderLiveTournamentData();
   }
 }
 
@@ -518,22 +551,6 @@ async function checkApiFootballStatus() {
   return true;
 }
 
-async function apiFootballProxy(endpoint, params = {}) {
-  await checkApiFootballStatus();
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === "") return;
-    search.set(key, String(value));
-  });
-
-  const response = await fetch(`./api-football/v3/${endpoint}${search.toString() ? `?${search}` : ""}`, { cache: "no-store" });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.ok === false) {
-    throw new Error(payload?.message || "API-FOOTBALL non disponibile");
-  }
-  return payload?.payload?.response || [];
-}
-
 function isWorldCup2026LiveItem(item = {}) {
   const league = item?.fixture?.league || item?.league || {};
   const leagueName = normalizePlayerName(league.name);
@@ -557,13 +574,13 @@ async function loadLiveCenter(options = {}) {
     try {
       await checkApiFootballStatus();
     } catch (error) {
-      renderLiveCenter("API-FOOTBALL non configurata o non raggiungibile.");
+      renderLiveCenter("Dati live Mondiali non disponibili al momento");
       return;
     }
   }
 
   if (!apiFootballState.configured) {
-    renderLiveCenter("API-FOOTBALL non configurata.");
+    renderLiveCenter("Dati live Mondiali non disponibili al momento");
     return;
   }
 
@@ -574,7 +591,7 @@ async function loadLiveCenter(options = {}) {
   }
 
   try {
-    const response = await fetch("./api-football/live-center", { cache: "no-store" });
+    const response = await fetch("./api-football/world-cup/live", { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.message || "Dati live non disponibili");
@@ -584,11 +601,11 @@ async function loadLiveCenter(options = {}) {
     apiFootballState.liveError = "";
     apiFootballState.liveUpdatedAt = payload.generatedAt || new Date().toISOString();
     if (liveFixtures.length && !apiFootballState.liveMatches.length) {
-      apiFootballState.liveError = "API-FOOTBALL ha restituito solo partite fuori Mondiale: ignorate.";
+      apiFootballState.liveError = "Dati live Mondiali non disponibili al momento";
     }
     renderLiveCenter();
   } catch (error) {
-    apiFootballState.liveError = "Nessuna partita live dei Mondiali al momento";
+    apiFootballState.liveError = "Dati live Mondiali non disponibili al momento";
     apiFootballState.liveMatches = [];
     apiFootballState.liveLoading = false;
     renderLiveCenter(apiFootballState.liveError);
@@ -1621,8 +1638,8 @@ function renderLiveCenter(statusMessage = "") {
 
   if (!apiFootballState.configured && apiFootballState.checked) {
     selectors.liveCenter.innerHTML = renderEmptyState(
-      "Nessuna partita live dei Mondiali al momento",
-      "Il Live Match Center mostra solo partite FIFA World Cup 2026 quando la fonte live e disponibile.",
+      "Dati live Mondiali non disponibili al momento",
+      "Il Live Center e pronto per partite, eventi, formazioni e statistiche ufficiali dei Mondiali 2026.",
     );
     return;
   }
@@ -1637,8 +1654,8 @@ function renderLiveCenter(statusMessage = "") {
 
   if (apiFootballState.liveError && !apiFootballState.liveMatches.length) {
     selectors.liveCenter.innerHTML = renderEmptyState(
-      "Nessuna partita live dei Mondiali al momento",
-      "Il Live Match Center mostra solo eventi FIFA World Cup 2026 e non crea risultati fittizi.",
+      "Dati live Mondiali non disponibili al momento",
+      "Il Live Center mostra solo eventi FIFA World Cup 2026 e non crea risultati fittizi.",
     );
     return;
   }
@@ -1652,6 +1669,122 @@ function renderLiveCenter(statusMessage = "") {
   }
 
   selectors.liveCenter.innerHTML = apiFootballState.liveMatches.map(renderLiveMatchCard).join("");
+}
+
+function renderLiveTournamentData() {
+  if (!selectors.liveTournamentData) return;
+
+  const updatedAt = apiFootballState.tournamentUpdatedAt
+    ? `<span>aggiornato ${escapeHtml(formatLiveUpdateTime(apiFootballState.tournamentUpdatedAt))}</span>`
+    : "";
+
+  selectors.liveTournamentData.innerHTML = `
+    <article class="live-data-card">
+      <div class="live-data-head">
+        <div>
+          <span>Classifica gironi</span>
+          <strong>FIFA World Cup 2026</strong>
+        </div>
+        ${updatedAt}
+      </div>
+      ${renderWorldCupStandingsPreview()}
+    </article>
+    <article class="live-data-card">
+      <div class="live-data-head">
+        <div>
+          <span>Capocannonieri</span>
+          <strong>Marcatori torneo</strong>
+        </div>
+        ${updatedAt}
+      </div>
+      ${renderWorldCupTopScorersPreview()}
+    </article>
+  `;
+}
+
+function renderWorldCupStandingsPreview() {
+  const groups = extractWorldCupStandingGroups(apiFootballState.standings);
+  if (apiFootballState.tournamentLoading && !groups.length) {
+    return renderLiveDataFallback("Classifica in aggiornamento", "Sto preparando le tabelle ufficiali dei gironi.");
+  }
+
+  if (!groups.length) {
+    return renderLiveDataFallback(
+      apiFootballState.standingsError || "Classifica in aggiornamento",
+      "Le classifiche compariranno appena API-FOOTBALL restituira dati ufficiali dei Mondiali 2026.",
+    );
+  }
+
+  return groups
+    .slice(0, 3)
+    .map(
+      (group) => `
+        <section class="live-standing-group">
+          <h3>${escapeHtml(group.name)}</h3>
+          ${group.rows
+            .slice(0, 4)
+            .map(
+              (row) => `
+                <div class="live-standing-row">
+                  <span>${escapeHtml(row.rank ? `${row.rank}. ` : "")}${escapeHtml(row.team?.name || unavailableText)}</span>
+                  <strong>${escapeHtml(String(row.points ?? 0))} pt</strong>
+                </div>
+              `,
+            )
+            .join("")}
+        </section>
+      `,
+    )
+    .join("");
+}
+
+function extractWorldCupStandingGroups(standings = []) {
+  const league = standings.find((item) => Array.isArray(item?.league?.standings))?.league;
+  const rawGroups = league?.standings || [];
+  return rawGroups.map((rows, index) => ({
+    name: rows?.[0]?.group || `Gruppo ${groupLetters[index] || index + 1}`,
+    rows: Array.isArray(rows) ? rows : [],
+  }));
+}
+
+function renderWorldCupTopScorersPreview() {
+  const scorers = apiFootballState.topScorers || [];
+  if (apiFootballState.tournamentLoading && !scorers.length) {
+    return renderLiveDataFallback("Capocannonieri in aggiornamento", "Sto verificando i marcatori ufficiali del torneo.");
+  }
+
+  if (!scorers.length) {
+    return renderLiveDataFallback(
+      apiFootballState.topScorersError || "Capocannonieri disponibili dopo l'inizio del torneo",
+      "La classifica marcatori verra popolata solo con dati ufficiali FIFA World Cup 2026.",
+    );
+  }
+
+  return scorers
+    .slice(0, 6)
+    .map((item, index) => {
+      const player = item.player || {};
+      const stats = item.statistics?.[0] || {};
+      const goals = stats.goals?.total ?? 0;
+      const team = stats.team?.name || player.nationality || unavailableText;
+      return `
+        <div class="live-scorer-row">
+          <span>${index + 1}. ${escapeHtml(player.name || unavailableText)}</span>
+          <strong>${escapeHtml(String(goals))} gol</strong>
+          <small>${escapeHtml(team)}</small>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderLiveDataFallback(title, copy) {
+  return `
+    <div class="live-data-fallback">
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(copy)}</p>
+    </div>
+  `;
 }
 
 function renderLiveMatchCard(item) {
@@ -2360,16 +2493,13 @@ function buildAnalysisInsight(model) {
   const isDrawScenario = prediction.pickSign === "X";
 
   if (isDrawScenario) {
+    const factors = getEquilibriumFactors(home, away, expectedGoals, prediction);
     return {
       scenario: "Equilibrio",
       level: confidence.label,
       className: confidence.className,
-      motivation: `La lettura dati indica margini ridotti tra ${home.name} e ${away.name}: ranking, forma e produzione offensiva restano vicini.`,
-      factors: [
-        "Differenza complessiva contenuta",
-        "xG attesi ravvicinati",
-        "Tendenza al pareggio sopra la media del modello",
-      ],
+      motivation: getEquilibriumMotivation(home, away, expectedGoals, factors),
+      factors,
       goalTrend: getGoalTrend(model),
     };
   }
@@ -2384,18 +2514,18 @@ function buildAnalysisInsight(model) {
     scenario: favorite.name,
     level: confidence.label,
     className: confidence.className,
-    motivation: `${favorite.name} emerge come scenario favorito nella lettura dati per ${formatReasonList(factors.slice(0, 2))}. E una tendenza statistica, non una certezza.`,
+    motivation: getFavoriteMotivation(favorite, underdog, factors, favoriteXg, underdogXg),
     factors,
     goalTrend: getGoalTrend(model),
   };
 }
 
 function getAnalysisConfidence(model) {
-  if (model.prediction.pickSign === "X" || model.probability < 0.56) {
+  if (model.prediction.pickSign === "X" || model.confidence < 44) {
     return { label: "Equilibrio / incertezza", className: "confidence-mid" };
   }
 
-  if (model.probability >= 0.64 && model.confidence >= 30) {
+  if (model.confidence >= 70) {
     return { label: "Alta", className: "confidence-high" };
   }
 
@@ -2403,20 +2533,98 @@ function getAnalysisConfidence(model) {
 }
 
 function getAnalysisFactors(favorite, underdog, favoriteXg, underdogXg) {
-  const factors = [];
-
-  if (favorite.rank < underdog.rank) factors.push("Ranking FIFA superiore");
-  if (favorite.rating - underdog.rating >= 6) factors.push("Indice complessivo piu alto");
-  if (favorite.form - underdog.form >= 5) factors.push("Forma stimata piu solida");
-  if (favorite.attack - underdog.defense >= 5) factors.push("Qualita offensiva piu alta");
-  if (favorite.defense - underdog.attack >= 5) factors.push("Maggiore solidita difensiva");
-  if (favorite.titles > underdog.titles) factors.push("Esperienza internazionale piu profonda");
-  if (favorite.host) factors.push("Contesto favorevole da paese ospitante");
-  if (favoriteXg - underdogXg >= 0.28) factors.push("xG stimato piu favorevole");
+  const candidates = [
+    { label: "Ranking FIFA superiore", score: (underdog.rank - favorite.rank) * 0.72 },
+    { label: "Indice complessivo piu alto", score: (favorite.rating - underdog.rating) * 2.2 },
+    { label: "Forma stimata piu solida", score: (favorite.form - underdog.form) * 1.45 },
+    { label: "Qualita offensiva piu alta", score: (favorite.attack - underdog.defense) * 1.25 },
+    { label: "Maggiore solidita difensiva", score: (favorite.defense - underdog.attack) * 1.15 },
+    { label: "Esperienza internazionale piu profonda", score: (favorite.titles - underdog.titles) * 9 },
+    { label: "Contesto favorevole da paese ospitante", score: favorite.host ? 13 : 0 },
+    { label: "xG stimato piu favorevole", score: (favoriteXg - underdogXg) * 20 },
+  ];
+  const factors = candidates
+    .filter((factor) => factor.score >= 5)
+    .sort((a, b) => b.score - a.score)
+    .map((factor) => factor.label);
 
   return unique(factors).slice(0, 3).length
     ? unique(factors).slice(0, 3)
-    : ["Profilo statistico piu continuo", "Differenziale tecnico leggero", "Lettura dati favorevole"];
+    : ["Differenziale tecnico leggero", "Lettura dati favorevole", "Profilo statistico piu continuo"];
+}
+
+function getEquilibriumFactors(home, away, expectedGoals, prediction) {
+  const factors = [];
+
+  if (Math.abs(home.rating - away.rating) <= 5) factors.push("Indice complessivo quasi allineato");
+  if (Math.abs(home.form - away.form) <= 5) factors.push("Forma stimata simile");
+  if (Math.abs(expectedGoals.home - expectedGoals.away) <= 0.24) factors.push("xG attesi ravvicinati");
+  if (prediction.draw >= 0.27) factors.push("Peso dell'equilibrio sopra la media del modello");
+  if (Math.abs(home.attack - away.defense) <= 5 && Math.abs(away.attack - home.defense) <= 5) {
+    factors.push("Duelli attacco-difesa bilanciati");
+  }
+
+  return unique(factors).slice(0, 3).length
+    ? unique(factors).slice(0, 3)
+    : ["Differenza complessiva contenuta", "xG attesi ravvicinati", "Lettura dati senza margine netto"];
+}
+
+function getFavoriteMotivation(favorite, underdog, factors, favoriteXg, underdogXg) {
+  const lead = factors[0] || "lettura dati favorevole";
+
+  if (lead.includes("xG")) {
+    return `${favorite.name} emerge per una proiezione offensiva piu alta: gli xG stimati (${favoriteXg.toFixed(2)} contro ${underdogXg.toFixed(2)}) aprono il margine principale. E una tendenza statistica, non una certezza.`;
+  }
+
+  if (lead.includes("offensiva")) {
+    return `${favorite.name} risulta avanti soprattutto nel confronto tra attacco e difesa avversaria. La lettura resta statistica e va pesata con il contesto della partita.`;
+  }
+
+  if (lead.includes("difensiva")) {
+    return `${favorite.name} ha un profilo piu solido nella fase difensiva, elemento che riduce lo spazio statistico per ${underdog.name}.`;
+  }
+
+  if (lead.includes("Forma")) {
+    return `${favorite.name} prende vantaggio per continuita recente e forma stimata piu stabile. Il margine non elimina l'incertezza, ma orienta lo scenario.`;
+  }
+
+  if (lead.includes("Ranking") || lead.includes("Indice")) {
+    if (factors.some((factor) => factor.includes("difensiva"))) {
+      return `${favorite.name} parte avanti per indice complessivo e maggiore tenuta difensiva. La lettura premia una struttura piu stabile contro il profilo offensivo di ${underdog.name}.`;
+    }
+
+    if (factors.some((factor) => factor.includes("Forma"))) {
+      return `${favorite.name} combina ranking, indice e forma stimata piu solida. La distanza nasce dalla continuita del profilo, non da un singolo dato isolato.`;
+    }
+
+    if (factors.some((factor) => factor.includes("xG"))) {
+      return `${favorite.name} parte avanti per indice complessivo e proiezione offensiva piu favorevole. Il margine tecnico si riflette anche negli xG stimati.`;
+    }
+
+    return `${favorite.name} parte avanti per combinazione di ranking e indice complessivo. La distanza tecnica pesa piu degli altri indicatori del modello.`;
+  }
+
+  if (lead.includes("Esperienza")) {
+    return `${favorite.name} beneficia di maggiore esperienza internazionale, un fattore che aumenta stabilita nelle partite ad alta pressione.`;
+  }
+
+  if (lead.includes("Contesto")) {
+    return `${favorite.name} ha una spinta di contesto da paese ospitante, integrata con ranking, forma e matchup tecnico.`;
+  }
+
+  return `${favorite.name} emerge come scenario favorito per ${formatReasonList(factors.slice(0, 2))}. E una tendenza statistica, non una certezza.`;
+}
+
+function getEquilibriumMotivation(home, away, expectedGoals, factors) {
+  if (factors.some((factor) => factor.includes("xG"))) {
+    return `La lettura dati indica margini ridotti tra ${home.name} e ${away.name}: gli xG restano vicini (${expectedGoals.home.toFixed(2)} - ${expectedGoals.away.toFixed(2)}) e non aprono un vantaggio netto.`;
+  }
+
+  if (factors.some((factor) => factor.includes("Forma"))) {
+    return `${home.name} e ${away.name} arrivano con segnali di forma simili. Il modello legge una partita bilanciata piu che un vantaggio marcato.`;
+  }
+
+  return `La lettura dati indica equilibrio tra ${home.name} e ${away.name}: ranking, indice e matchup tecnico non separano chiaramente le due squadre.`;
 }
 
 function getGoalTrend(model) {
@@ -2508,6 +2716,63 @@ const doubleChance =
   return { homeWin, draw, awayWin, pick, pickSign, pickIq, doubleChance, reason, outcomes, primary };
 }
 
+function calculateAnalysisPrediction(home, away, fixture) {
+  const edge = getAnalysisMatchEdge(home, away, fixture);
+  const balance = Math.abs(edge);
+  const defenseControl = ((home.defense + away.defense) - (home.attack + away.attack)) * 0.0018;
+  const draw = clamp(0.3 - balance * 0.0042 + defenseControl, 0.13, 0.33);
+  const homeShare = 1 / (1 + Math.exp(-edge / 14.5));
+  const homeWin = (1 - draw) * homeShare;
+  const awayWin = 1 - draw - homeWin;
+  const outcomes = {
+    home: { sign: "1", label: home.name, probability: homeWin },
+    draw: { sign: "X", label: "Equilibrio", probability: draw },
+    away: { sign: "2", label: away.name, probability: awayWin },
+  };
+  const strongestWin = homeWin >= awayWin ? outcomes.home : outcomes.away;
+  const closeScenario =
+    balance < 2.6 &&
+    Math.abs(home.rating - away.rating) <= 5 &&
+    Math.abs(home.form - away.form) <= 6 &&
+    draw >= strongestWin.probability - 0.045;
+  const primary = closeScenario
+    ? outcomes.draw
+    : [outcomes.home, outcomes.draw, outcomes.away].reduce((best, outcome) =>
+        outcome.probability > best.probability ? outcome : best,
+      );
+  const pick = primary.label;
+  const pickSign = primary.sign;
+  const pickIq =
+    pickSign === "1" ? "Preview Casa" : pickSign === "2" ? "Preview Trasferta" : "Preview Pareggio";
+  const doubleChance =
+    pickSign === "1"
+      ? `${home.name} o pareggio`
+      : pickSign === "2"
+        ? `${away.name} o pareggio`
+        : `${home.name} o ${away.name}`;
+  const stronger = homeWin >= awayWin ? home : away;
+  const weaker = homeWin >= awayWin ? away : home;
+  const reason =
+    pickSign === "X"
+      ? `Il modello legge equilibrio: indice, forma e matchup tecnico restano vicini tra ${home.name} e ${away.name}.`
+      : `${stronger.name} parte avanti per una combinazione di ranking, forma, matchup attacco-difesa e contesto (${stronger.rating} contro ${weaker.rating}).`;
+
+  return { homeWin, draw, awayWin, pick, pickSign, pickIq, doubleChance, reason, outcomes, primary, edge };
+}
+
+function getAnalysisMatchEdge(home, away) {
+  const ratingEdge = (home.rating - away.rating) * 0.5;
+  const rankingEdge = (away.rank - home.rank) * 0.16;
+  const formEdge = (home.form - away.form) * 0.22;
+  const attackEdge = ((home.attack - away.defense) - (away.attack - home.defense)) * 0.24;
+  const defenseEdge = ((home.defense - away.attack) - (away.defense - home.attack)) * 0.13;
+  const experienceEdge = (Math.min(home.titles, 5) - Math.min(away.titles, 5)) * 0.95;
+  const contextEdge = (home.host ? 2.6 : 0) - (away.host ? 2.6 : 0);
+  const tempoEdge = getTeamTempoModifier(home) - getTeamTempoModifier(away);
+
+  return ratingEdge + rankingEdge + formEdge + attackEdge + defenseEdge + experienceEdge + contextEdge + tempoEdge;
+}
+
 function buildMatchModel(fixture) {
   if (!fixture) return null;
 
@@ -2515,10 +2780,12 @@ function buildMatchModel(fixture) {
   const away = teamById.get(fixture.away);
   if (!home || !away) return null;
 
-  const prediction = calculatePrediction(home, away);
+  const prediction = calculateAnalysisPrediction(home, away, fixture);
   const expectedGoals = calculateExpectedGoals(home, away, fixture);
   const probability = prediction.primary.probability;
-  const confidence = clamp(Math.round((probability - prediction.draw) * 100), 8, 74);
+  const confidence = getAnalysisConfidencePercent(prediction, expectedGoals);
+  const modelConfidenceClass =
+    confidence >= 70 ? "confidence-high" : confidence >= 44 ? "confidence-low" : "confidence-mid";
   const totalXg = expectedGoals.home + expectedGoals.away;
   const goalSuggestion = totalXg > 2.4 ? "Tendenza reti alta" : "Tendenza reti contenuta";
 
@@ -2531,9 +2798,27 @@ function buildMatchModel(fixture) {
     probability,
     probabilityPercent: Math.round(probability * 100),
     confidence,
-    confidenceClass: confidenceClass(probability),
+    confidenceClass: modelConfidenceClass,
     goalSuggestion,
   };
+}
+
+function getAnalysisConfidencePercent(prediction, expectedGoals) {
+  const outcomes = Object.values(prediction.outcomes).sort((a, b) => b.probability - a.probability);
+  const secondProbability = outcomes.find((outcome) => outcome.sign !== prediction.primary.sign)?.probability || 0;
+  const probabilityGap = Math.max(0, prediction.primary.probability - secondProbability);
+  const edgeWeight = Math.abs(prediction.edge || 0);
+  const xgGap = Math.abs(expectedGoals.home - expectedGoals.away);
+
+  if (prediction.primary.sign === "X") {
+    return clamp(Math.round(22 + prediction.draw * 26 + Math.max(0, 0.3 - xgGap) * 18), 22, 38);
+  }
+
+  const probabilitySignal = probabilityGap * 30;
+  const edgeSignal = Math.log1p(edgeWeight) * 2.25;
+  const xgSignal = Math.min(xgGap, 2.4) * 3.1;
+
+  return clamp(Math.round(32 + probabilitySignal + edgeSignal + xgSignal), 32, 79);
 }
 
 function confidenceClass(probability) {
@@ -2545,22 +2830,12 @@ function confidenceClass(probability) {
 function calculateExpectedGoals(home, away, fixture) {
   const homeTrend = getPreviousTournamentStats(home.id, fixture);
   const awayTrend = getPreviousTournamentStats(away.id, fixture);
+  const paceModifier = getMatchPaceModifier(home, away, homeTrend, awayTrend);
+  const homeBase = getTeamExpectedGoalBase(home, away, homeTrend, awayTrend);
+  const awayBase = getTeamExpectedGoalBase(away, home, awayTrend, homeTrend) * 0.96;
 
-  const homeBase =
-    1.18 +
-    (home.attack - away.defense) * 0.018 +
-    (home.form - away.form) * 0.006 +
-    (home.rating - away.rating) * 0.01 +
-    (home.host ? 0.12 : 0);
-  const awayBase =
-    1.02 +
-    (away.attack - home.defense) * 0.018 +
-    (away.form - home.form) * 0.006 +
-    (away.rating - home.rating) * 0.01 +
-    (away.host ? 0.12 : 0);
-
-  const homeXg = clamp(homeBase + getLiveXgModifier(homeTrend, awayTrend), 0.25, 3.4);
-  const awayXg = clamp(awayBase + getLiveXgModifier(awayTrend, homeTrend), 0.25, 3.4);
+  const homeXg = clamp(homeBase * paceModifier, 0.25, 3.35);
+  const awayXg = clamp(awayBase * paceModifier, 0.25, 3.25);
   const hasLiveData = homeTrend.matches > 0 || awayTrend.matches > 0;
   const note = hasLiveData
     ? "L'xG include anche le partite gia giocate prima di questa gara."
@@ -2569,10 +2844,74 @@ function calculateExpectedGoals(home, away, fixture) {
   return { home: homeXg, away: awayXg, note };
 }
 
+function getTeamExpectedGoalBase(team, opponent, teamTrend, opponentTrend) {
+  const attackQuality = (team.attack - 70) * 0.019;
+  const defensiveWeakness = (72 - opponent.defense) * 0.016;
+  const ratingEdge = (team.rating - opponent.rating) * 0.012;
+  const formEdge = (team.form - opponent.form) * 0.008;
+  const rankingEdge = (opponent.rank - team.rank) * 0.0035;
+  const experienceEdge = (Math.min(team.titles, 5) - Math.min(opponent.titles, 5)) * 0.018;
+  const contextEdge = team.host ? 0.1 : 0;
+  const tempoEdge = getTeamTempoModifier(team) * 0.04;
+  const liveEdge = getLiveXgModifier(teamTrend, opponentTrend);
+
+  return (
+    1.05 +
+    attackQuality +
+    defensiveWeakness +
+    ratingEdge +
+    formEdge +
+    rankingEdge +
+    experienceEdge +
+    contextEdge +
+    tempoEdge +
+    liveEdge
+  );
+}
+
+function getMatchPaceModifier(home, away, homeTrend, awayTrend) {
+  const attackPace = ((home.attack + away.attack) / 2 - 70) * 0.006;
+  const formPace = ((home.form + away.form) / 2 - 70) * 0.003;
+  const defenseControl = ((home.defense + away.defense) / 2 - 72) * 0.005;
+  const stylePace = (getTeamTempoModifier(home) + getTeamTempoModifier(away)) * 0.025;
+  const livePace = getLivePaceModifier(homeTrend, awayTrend);
+
+  return clamp(1 + attackPace + formPace + stylePace + livePace - defenseControl, 0.84, 1.2);
+}
+
 function getLiveXgModifier(teamTrend, opponentTrend) {
   const attackTrend = teamTrend.matches ? (teamTrend.goalsFor / teamTrend.matches - 1.25) * 0.22 : 0;
   const opponentDefTrend = opponentTrend.matches ? (opponentTrend.goalsAgainst / opponentTrend.matches - 1.15) * 0.18 : 0;
   return attackTrend + opponentDefTrend;
+}
+
+function getLivePaceModifier(homeTrend, awayTrend) {
+  const trends = [homeTrend, awayTrend].filter((trend) => trend.matches > 0);
+  if (!trends.length) return 0;
+
+  const goalsPerMatch =
+    trends.reduce((sum, trend) => sum + (trend.goalsFor + trend.goalsAgainst) / trend.matches, 0) / trends.length;
+
+  return clamp((goalsPerMatch - 2.35) * 0.06, -0.1, 0.12);
+}
+
+function getTeamTempoModifier(team = {}) {
+  const style = String(team.style || "").toLowerCase();
+  let modifier = 0;
+
+  if (/pressing|transizioni|ripartenze|velocita|ritmo|attacco|talento|finalizzazione|potenza/.test(style)) {
+    modifier += 1;
+  }
+
+  if (/blocco|compatto|compattezza|difesa|ordinata|possesso basso|controllo/.test(style)) {
+    modifier -= 1;
+  }
+
+  if (team.attack >= 82) modifier += 0.5;
+  if (team.defense >= 84) modifier -= 0.45;
+  if (team.form >= 82) modifier += 0.2;
+
+  return clamp(modifier, -1.4, 1.4);
 }
 
 function getPreviousTournamentStats(teamId, fixture) {
