@@ -281,7 +281,7 @@ function setupAppMode() {
 
   if (canUseServiceWorker) {
     safeAddEventListener(window, "load", () => {
-      navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+      navigator.serviceWorker.register("./service-worker.js?v=51").catch(() => {});
     });
   }
 }
@@ -2055,12 +2055,13 @@ function renderMeter(label, value) {
 function renderPredictorOptions() {
   if (!selectors.matchPredictSelect) return;
 
-  const groupFixtures = fixtures.filter((fixture) => fixture.home && fixture.away);
+  const groupFixtures = getCurrentGroupMatchdayFixtures();
   if (!groupFixtures.length) {
     selectors.matchPredictSelect.innerHTML = `<option value="">Partita non disponibile</option>`;
     return;
   }
 
+  const selectedValue = selectors.matchPredictSelect.value;
   selectors.matchPredictSelect.innerHTML = groupFixtures
     .map((fixture) => {
       const home = teamById.get(fixture.home);
@@ -2068,6 +2069,39 @@ function renderPredictorOptions() {
       return `<option value="${fixture.id}">#${fixture.id} ${home.name} - ${away.name}</option>`;
     })
     .join("");
+
+  if ([...selectors.matchPredictSelect.options].some((option) => option.value === selectedValue)) {
+    selectors.matchPredictSelect.value = selectedValue;
+  }
+}
+
+function getCurrentGroupMatchdayFixtures() {
+  const groupFixtures = fixtures.filter((fixture) => fixture.stage === "Group Stage" && fixture.home && fixture.away);
+  const matchday = getCurrentGroupMatchday(groupFixtures);
+
+  return groupFixtures.filter((fixture) => getGroupMatchdayNumber(fixture) === matchday);
+}
+
+function getCurrentGroupMatchday(groupFixtures) {
+  const matchdays = [1, 2, 3];
+  const activeMatchday = matchdays.find((matchday) => {
+    const matchdayFixtures = groupFixtures.filter((fixture) => getGroupMatchdayNumber(fixture) === matchday);
+    return matchdayFixtures.length && !matchdayFixtures.every(isFixtureCompleted);
+  });
+
+  return activeMatchday || 3;
+}
+
+function getGroupMatchdayNumber(fixture) {
+  if (fixture.stage !== "Group Stage") return null;
+  if (fixture.id >= 1 && fixture.id <= 24) return 1;
+  if (fixture.id >= 25 && fixture.id <= 48) return 2;
+  if (fixture.id >= 49 && fixture.id <= 72) return 3;
+  return null;
+}
+
+function isFixtureCompleted(fixture) {
+  return Number.isFinite(Number(fixture.score?.home)) && Number.isFinite(Number(fixture.score?.away));
 }
 
 function renderPrediction() {
@@ -2260,11 +2294,11 @@ function renderAnalysisCard(model) {
       ${renderTeamTiny(model.away)}
     </div>
     <div class="analysis-summary-grid">
-      <article>
+      <article class="analysis-primary-metric">
         <span>Scenario favorito</span>
         <strong class="${insight.className}">${escapeHtml(insight.scenario)}</strong>
       </article>
-      <article>
+      <article class="analysis-confidence-metric">
         <span>Indice fiducia</span>
         <strong class="${insight.className}">${escapeHtml(insight.level)}</strong>
         <small>${model.confidence}% | lettura dati</small>
@@ -2285,9 +2319,10 @@ function renderAnalysisCard(model) {
           ${insight.factors.map((factor) => `<li>${escapeHtml(factor)}</li>`).join("")}
         </ul>
       </article>
-      <article class="analysis-risk">
-        <span>Possibile rischio</span>
-        <p>${escapeHtml(insight.risk)}</p>
+      <article class="analysis-goal-trend">
+        <span>Scenario gol</span>
+        <strong>${escapeHtml(insight.goalTrend.label)}</strong>
+        <p>${escapeHtml(insight.goalTrend.copy)}</p>
       </article>
     </div>
   `;
@@ -2335,7 +2370,7 @@ function buildAnalysisInsight(model) {
         "xG attesi ravvicinati",
         "Tendenza al pareggio sopra la media del modello",
       ],
-      risk: "Un episodio su palla inattiva o una transizione puo spostare rapidamente l'inerzia.",
+      goalTrend: getGoalTrend(model),
     };
   }
 
@@ -2351,7 +2386,7 @@ function buildAnalysisInsight(model) {
     className: confidence.className,
     motivation: `${favorite.name} emerge come scenario favorito nella lettura dati per ${formatReasonList(factors.slice(0, 2))}. E una tendenza statistica, non una certezza.`,
     factors,
-    risk: getAnalysisRisk(favorite, underdog, prediction.draw),
+    goalTrend: getGoalTrend(model),
   };
 }
 
@@ -2384,22 +2419,50 @@ function getAnalysisFactors(favorite, underdog, favoriteXg, underdogXg) {
     : ["Profilo statistico piu continuo", "Differenziale tecnico leggero", "Lettura dati favorevole"];
 }
 
-function getAnalysisRisk(favorite, underdog, drawProbability) {
-  const style = String(underdog.style || "").toLowerCase();
+function getGoalTrend(model) {
+  const { home, away, expectedGoals, prediction } = model;
+  const totalXg = expectedGoals.home + expectedGoals.away;
+  const attackIndex = (home.attack + away.attack) / 2;
+  const formIndex = (home.form + away.form) / 2;
+  const defenseIndex = (home.defense + away.defense) / 2;
+  const chanceGap = Math.abs(expectedGoals.home - expectedGoals.away);
+  const attackVsDefenseGap = Math.max(home.attack - away.defense, away.attack - home.defense, 0);
+  const liveGoalsTrend = getLiveGoalTrendModifier(home.id, away.id);
+  const opennessScore =
+    totalXg +
+    (attackIndex - 70) * 0.012 +
+    (formIndex - 70) * 0.006 +
+    attackVsDefenseGap * 0.008 +
+    liveGoalsTrend -
+    (defenseIndex - 72) * 0.009 -
+    prediction.draw * 0.42 -
+    (chanceGap < 0.24 ? 0.1 : 0);
 
-  if (drawProbability >= 0.24) {
-    return `Il pareggio resta uno scenario credibile se ${favorite.name} non alza ritmo e qualita delle occasioni.`;
+  if (opennessScore >= 2.58) {
+    return {
+      label: "Over 2.5",
+      copy: "Tendenza dati: gara con potenziale da almeno 3 gol.",
+    };
   }
 
-  if (style.includes("transizioni") || style.includes("ripartenze")) {
-    return `${underdog.name} puo essere pericolosa quando trova campo in transizione.`;
-  }
+  return {
+    label: "Under 2.5",
+    copy: "Tendenza dati: ritmo atteso piu controllato.",
+  };
+}
 
-  if (underdog.form >= favorite.form - 4) {
-    return `${underdog.name} ha una forma stimata vicina e puo rendere la gara meno lineare.`;
-  }
+function getLiveGoalTrendModifier(homeId, awayId) {
+  const teamsTrend = [homeId, awayId]
+    .map((teamId) => getPreviousTournamentStats(teamId, { date: "2100-01-01", timeET: "00:00" }))
+    .filter((trend) => trend.matches > 0);
 
-  return `${underdog.name} puo complicare la lettura abbassando ritmo e spazi tra le linee.`;
+  if (!teamsTrend.length) return 0;
+
+  const goalsPerMatch =
+    teamsTrend.reduce((sum, trend) => sum + (trend.goalsFor + trend.goalsAgainst) / trend.matches, 0) /
+    teamsTrend.length;
+
+  return clamp((goalsPerMatch - 2.4) * 0.16, -0.18, 0.18);
 }
 
 function formatReasonList(items) {
