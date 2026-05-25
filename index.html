@@ -16,7 +16,7 @@
     <link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png" />
     <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
     <link rel="apple-touch-startup-image" href="assets/splash/splash-1170x2532.png" />
-    <link rel="stylesheet" href="styles.css?v=45" />
+    <link rel="stylesheet" href="styles.css?v=46" />
   </head>
   <body class="is-loading home-active">
     <div class="app-status" id="appStatus">Caricamento app...</div>
@@ -290,7 +290,7 @@
         <section class="panel" id="predictor" aria-labelledby="predictor-title">
           <div class="section-head">
             <div>
-              <p class="eyebrow">Algoritmo suggerito</p>
+              <p class="eyebrow">Lettura dati</p>
               <h2 id="predictor-title"><span class="analisi-wordmark">Analisi<span class="iq-cluster"><span class="iq-ball-i">I</span>Q</span></span></h2>
             </div>
             <div class="filters predictor-controls">
@@ -317,15 +317,15 @@
                 <strong>22%</strong>
               </div>
               <div class="model-row">
-                <span>Storia e casa</span>
+                <span>Esperienza e contesto</span>
                 <strong>12%</strong>
               </div>
             </aside>
           </div>
           <div class="analysis-color-legend" aria-label="Legenda colori AnalisiIQ">
-            <span><i class="legend-dot confidence-low"></i> Bronzo: equilibrio o vantaggio leggero</span>
-            <span><i class="legend-dot confidence-mid"></i> Argento: vantaggio medio</span>
-            <span><i class="legend-dot confidence-high"></i> Oro: indicazione piu forte</span>
+            <span><i class="legend-dot confidence-high"></i> Oro = fiducia alta</span>
+            <span><i class="legend-dot confidence-low"></i> Bronzo = fiducia media</span>
+            <span><i class="legend-dot confidence-mid"></i> Grigio = equilibrio/incertezza</span>
           </div>
         </section>
 
@@ -342,6 +342,6 @@
     </div>
 
     <script src="data.js?v=22"></script>
-    <script src="app.js?v=46"></script>
+    <script src="app.js?v=47"></script>
   </body>
 </html>

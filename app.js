@@ -2087,48 +2087,7 @@ function renderPrediction() {
   }
 
   selectors.predictionCard.innerHTML = `
-    <div class="prediction-head">
-      <span class="match-number">#${fixture.id}</span>
-      <span>${formatFixtureDate(fixture)}</span>
-    </div>
-    <div class="prediction-teams">
-      ${renderPredictionTeam(model.home, model.prediction.homeWin, model.expectedGoals.home, "1")}
-      <div class="draw-box">
-        <span class="outcome-label">Pareggio</span>
-        <strong class="${confidenceClass(model.prediction.draw)}">${Math.round(model.prediction.draw * 100)}%</strong>
-        <span>Pareggio</span>
-        <div class="probability-track draw-track">
-          <span class="${confidenceClass(model.prediction.draw)}" style="width: ${Math.round(model.prediction.draw * 100)}%"></span>
-        </div>
-      </div>
-      ${renderPredictionTeam(model.away, model.prediction.awayWin, model.expectedGoals.away, "2")}
-    </div>
-    <div class="suggestions">
-      <article>
-        <span>Pronostico consigliato</span>
-        <strong class="confidence-pill ${model.confidenceClass}">${model.prediction.pickIq} - ${model.prediction.pick} ${model.probabilityPercent}%</strong>
-      </article>
-      <article>
-        <span>Alternativa prudente</span>
-        <strong>${model.prediction.doubleChance}</strong>
-      </article>
-      <article>
-        <span>xG stimato</span>
-        <strong>${model.expectedGoals.home.toFixed(2)} - ${model.expectedGoals.away.toFixed(2)}</strong>
-      </article>
-      <article>
-        <span>Expected Goal Line</span>
-        <strong>${model.goalSuggestion}</strong>
-      </article>
-      <article>
-        <span>Confidence Level</span>
-        <strong>${model.confidence}%</strong>
-      </article>
-    </div>
-    <div class="reasoning">
-      <h3>Lettura</h3>
-      <p>${model.prediction.reason} ${model.expectedGoals.note}</p>
-    </div>
+    ${renderAnalysisCard(model)}
   `;
 }
 
@@ -2283,6 +2242,57 @@ function renderAnalisiIQWordmark() {
   return `<span class="analisi-wordmark">Analisi<span class="iq-cluster"><span class="iq-ball-i">I</span>Q</span></span>`;
 }
 
+function renderAnalysisCard(model) {
+  const insight = buildAnalysisInsight(model);
+  const fixture = model.fixture;
+
+  return `
+    <div class="analysis-card-head">
+      <div>
+        <span class="match-number">#${fixture.id}</span>
+        <span>${stageLabels[fixture.stage] || fixture.stage}</span>
+      </div>
+      <strong>${formatFixtureDate(fixture)}</strong>
+    </div>
+    <div class="analysis-match-row">
+      ${renderTeamTiny(model.home)}
+      <span class="versus">vs</span>
+      ${renderTeamTiny(model.away)}
+    </div>
+    <div class="analysis-summary-grid">
+      <article>
+        <span>Scenario favorito</span>
+        <strong class="${insight.className}">${escapeHtml(insight.scenario)}</strong>
+      </article>
+      <article>
+        <span>Indice fiducia</span>
+        <strong class="${insight.className}">${escapeHtml(insight.level)}</strong>
+        <small>${model.confidence}% | lettura dati</small>
+      </article>
+      <article>
+        <span>xG stimato</span>
+        <strong>${model.expectedGoals.home.toFixed(2)} - ${model.expectedGoals.away.toFixed(2)}</strong>
+      </article>
+    </div>
+    <div class="analysis-reasoning">
+      <span>Motivazione</span>
+      <p>${escapeHtml(insight.motivation)}</p>
+    </div>
+    <div class="analysis-factor-grid">
+      <article>
+        <span>Fattori chiave</span>
+        <ul>
+          ${insight.factors.map((factor) => `<li>${escapeHtml(factor)}</li>`).join("")}
+        </ul>
+      </article>
+      <article class="analysis-risk">
+        <span>Possibile rischio</span>
+        <p>${escapeHtml(insight.risk)}</p>
+      </article>
+    </div>
+  `;
+}
+
 function getLocalDateKey(date) {
   const formatter = new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
@@ -2307,6 +2317,96 @@ function renderPredictionTeam(team, probability, expectedGoal, sign) {
       <small>xG ${expectedGoal.toFixed(2)} | Indice ${team.rating} | ranking ${team.rank}</small>
     </article>
   `;
+}
+
+function buildAnalysisInsight(model) {
+  const { home, away, prediction, expectedGoals } = model;
+  const confidence = getAnalysisConfidence(model);
+  const isDrawScenario = prediction.pickSign === "X";
+
+  if (isDrawScenario) {
+    return {
+      scenario: "Equilibrio",
+      level: confidence.label,
+      className: confidence.className,
+      motivation: `La lettura dati indica margini ridotti tra ${home.name} e ${away.name}: ranking, forma e produzione offensiva restano vicini.`,
+      factors: [
+        "Differenza complessiva contenuta",
+        "xG attesi ravvicinati",
+        "Tendenza al pareggio sopra la media del modello",
+      ],
+      risk: "Un episodio su palla inattiva o una transizione puo spostare rapidamente l'inerzia.",
+    };
+  }
+
+  const favorite = prediction.pickSign === "1" ? home : away;
+  const underdog = prediction.pickSign === "1" ? away : home;
+  const favoriteXg = prediction.pickSign === "1" ? expectedGoals.home : expectedGoals.away;
+  const underdogXg = prediction.pickSign === "1" ? expectedGoals.away : expectedGoals.home;
+  const factors = getAnalysisFactors(favorite, underdog, favoriteXg, underdogXg);
+
+  return {
+    scenario: favorite.name,
+    level: confidence.label,
+    className: confidence.className,
+    motivation: `${favorite.name} emerge come scenario favorito nella lettura dati per ${formatReasonList(factors.slice(0, 2))}. E una tendenza statistica, non una certezza.`,
+    factors,
+    risk: getAnalysisRisk(favorite, underdog, prediction.draw),
+  };
+}
+
+function getAnalysisConfidence(model) {
+  if (model.prediction.pickSign === "X" || model.probability < 0.56) {
+    return { label: "Equilibrio / incertezza", className: "confidence-mid" };
+  }
+
+  if (model.probability >= 0.64 && model.confidence >= 30) {
+    return { label: "Alta", className: "confidence-high" };
+  }
+
+  return { label: "Media", className: "confidence-low" };
+}
+
+function getAnalysisFactors(favorite, underdog, favoriteXg, underdogXg) {
+  const factors = [];
+
+  if (favorite.rank < underdog.rank) factors.push("Ranking FIFA superiore");
+  if (favorite.rating - underdog.rating >= 6) factors.push("Indice complessivo piu alto");
+  if (favorite.form - underdog.form >= 5) factors.push("Forma stimata piu solida");
+  if (favorite.attack - underdog.defense >= 5) factors.push("Qualita offensiva piu alta");
+  if (favorite.defense - underdog.attack >= 5) factors.push("Maggiore solidita difensiva");
+  if (favorite.titles > underdog.titles) factors.push("Esperienza internazionale piu profonda");
+  if (favorite.host) factors.push("Contesto favorevole da paese ospitante");
+  if (favoriteXg - underdogXg >= 0.28) factors.push("xG stimato piu favorevole");
+
+  return unique(factors).slice(0, 3).length
+    ? unique(factors).slice(0, 3)
+    : ["Profilo statistico piu continuo", "Differenziale tecnico leggero", "Lettura dati favorevole"];
+}
+
+function getAnalysisRisk(favorite, underdog, drawProbability) {
+  const style = String(underdog.style || "").toLowerCase();
+
+  if (drawProbability >= 0.24) {
+    return `Il pareggio resta uno scenario credibile se ${favorite.name} non alza ritmo e qualita delle occasioni.`;
+  }
+
+  if (style.includes("transizioni") || style.includes("ripartenze")) {
+    return `${underdog.name} puo essere pericolosa quando trova campo in transizione.`;
+  }
+
+  if (underdog.form >= favorite.form - 4) {
+    return `${underdog.name} ha una forma stimata vicina e puo rendere la gara meno lineare.`;
+  }
+
+  return `${underdog.name} puo complicare la lettura abbassando ritmo e spazi tra le linee.`;
+}
+
+function formatReasonList(items) {
+  if (!items.length) return "un profilo statistico piu continuo";
+  if (items.length === 1) return items[0].toLowerCase();
+
+  return `${items[0].toLowerCase()} e ${items[1].toLowerCase()}`;
 }
 
 function calculatePrediction(home, away) {
@@ -2357,7 +2457,7 @@ function buildMatchModel(fixture) {
   const probability = prediction.primary.probability;
   const confidence = clamp(Math.round((probability - prediction.draw) * 100), 8, 74);
   const totalXg = expectedGoals.home + expectedGoals.away;
-  const goalSuggestion = totalXg > 2.4 ? "Over 2.5" : "Under 2.5";
+  const goalSuggestion = totalXg > 2.4 ? "Tendenza reti alta" : "Tendenza reti contenuta";
 
   return {
     fixture,
@@ -2482,7 +2582,7 @@ function renderMatchDetail(model) {
             <strong class="confidence-pill ${model.confidenceClass}">${prediction.pickIq} - ${prediction.pick}</strong>
           </article>
           <article>
-            <span>Prudente</span>
+            <span>Scenario alternativo</span>
             <strong>${prediction.doubleChance}</strong>
           </article>
           <article>
@@ -2490,7 +2590,7 @@ function renderMatchDetail(model) {
             <strong>${model.confidence}%</strong>
           </article>
           <article>
-            <span>Expected Goal Line</span>
+            <span>Tendenza reti</span>
             <strong>${model.goalSuggestion}</strong>
           </article>
         </div>
