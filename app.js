@@ -39,9 +39,66 @@ const worldCupStatisticsTabs = [
 ];
 const liveDetailTabs = [
   { id: "info", label: "Informazioni" },
-  { id: "timeline", label: "Timeline" },
+  { id: "timeline", label: "Tabellino" },
   { id: "lineups", label: "Formazioni" },
 ];
+const liveLineupFallbackTheme = {
+  primary: "#0b111a",
+  secondary: "#172131",
+  accent: "#ffd86a",
+  role: "#ffd86a",
+  label: "rgba(8, 13, 20, 0.74)",
+};
+const liveLineupTeamThemes = {
+  mex: { primary: "#12543a", secondary: "#87262a", accent: "#f1f5ef", role: "#fff9e5", label: "rgba(10, 45, 33, 0.82)" },
+  rsa: { primary: "#0d5a3b", secondary: "#162f59", accent: "#f0c94a", role: "#fff9e5", label: "rgba(9, 42, 33, 0.82)" },
+  kor: { primary: "#f3f7fb", secondary: "#244274", accent: "#b83a42", role: "#0b1424", label: "rgba(14, 27, 52, 0.82)" },
+  cze: { primary: "#0f4b86", secondary: "#b5343f", accent: "#f7fbff", role: "#fff9e5", label: "rgba(12, 31, 56, 0.84)" },
+  can: { primary: "#a82430", secondary: "#f4f1ea", accent: "#ffffff", role: "#fff9e5", label: "rgba(83, 18, 25, 0.84)" },
+  bih: { primary: "#1952a3", secondary: "#123967", accent: "#f3cc4d", role: "#fff5bf", label: "rgba(11, 32, 66, 0.84)" },
+  qat: { primary: "#741f3d", secondary: "#4d1429", accent: "#f3efe8", role: "#fff9e5", label: "rgba(61, 12, 31, 0.84)" },
+  sui: { primary: "#b42531", secondary: "#7d1a24", accent: "#fff7ed", role: "#fff9e5", label: "rgba(78, 14, 22, 0.84)" },
+  bra: { primary: "#0f6a3e", secondary: "#0b4e2f", accent: "#f0d34f", role: "#fff3a3", label: "rgba(7, 48, 32, 0.84)" },
+  mar: { primary: "#8f202b", secondary: "#b52c36", accent: "#1f8c55", role: "#fff4e6", label: "rgba(72, 15, 24, 0.86)" },
+  hai: { primary: "#193c92", secondary: "#9e2532", accent: "#f0f4ff", role: "#fff9e5", label: "rgba(15, 31, 67, 0.84)" },
+  sco: { primary: "#18519a", secondary: "#0f365f", accent: "#f5fbff", role: "#fff9e5", label: "rgba(11, 32, 61, 0.84)" },
+  usa: { primary: "#1b315c", secondary: "#9b2432", accent: "#f5f7fb", role: "#fff9e5", label: "rgba(12, 24, 49, 0.84)" },
+  par: { primary: "#9d2330", secondary: "#1f3f78", accent: "#f7fbff", role: "#fff9e5", label: "rgba(57, 23, 45, 0.84)" },
+  aus: { primary: "#0b4f3a", secondary: "#14315c", accent: "#f4c84d", role: "#fff2a8", label: "rgba(7, 43, 34, 0.84)" },
+  tur: { primary: "#9e2430", secondary: "#711923", accent: "#fff1e8", role: "#fff9e5", label: "rgba(71, 13, 21, 0.84)" },
+  ger: { primary: "#f2efe6", secondary: "#111820", accent: "#d5a72f", role: "#111820", label: "rgba(12, 13, 15, 0.86)" },
+  cur: { primary: "#173f86", secondary: "#0e2b5f", accent: "#f4d34f", role: "#fff3a3", label: "rgba(11, 28, 61, 0.84)" },
+  civ: { primary: "#b9672c", secondary: "#18633e", accent: "#f8f0e3", role: "#fff7ed", label: "rgba(67, 43, 25, 0.84)" },
+  ecu: { primary: "#d7a92e", secondary: "#1e4f8f", accent: "#b42b36", role: "#17130b", label: "rgba(53, 38, 19, 0.84)" },
+  ned: { primary: "#c46f28", secondary: "#18345f", accent: "#fff1dd", role: "#fff9e5", label: "rgba(61, 34, 20, 0.84)" },
+  jpn: { primary: "#f4f2ea", secondary: "#b52d3a", accent: "#b52d3a", role: "#1a1d23", label: "rgba(50, 18, 25, 0.84)" },
+  swe: { primary: "#1d5d9e", secondary: "#113c68", accent: "#f1cf50", role: "#fff2a5", label: "rgba(11, 34, 60, 0.84)" },
+  tun: { primary: "#ae2431", secondary: "#7e1823", accent: "#fff1e8", role: "#fff9e5", label: "rgba(74, 13, 21, 0.84)" },
+  bel: { primary: "#111820", secondary: "#9f2531", accent: "#f0c84d", role: "#f7d66a", label: "rgba(9, 12, 17, 0.86)" },
+  egy: { primary: "#a82430", secondary: "#171b21", accent: "#f4efe7", role: "#fff9e5", label: "rgba(58, 15, 22, 0.84)" },
+  irn: { primary: "#17623f", secondary: "#9f2632", accent: "#f5f3ea", role: "#fff9e5", label: "rgba(11, 47, 33, 0.84)" },
+  nzl: { primary: "#14284e", secondary: "#243f74", accent: "#d03a46", role: "#fff9e5", label: "rgba(9, 22, 45, 0.84)" },
+  esp: { primary: "#b62a33", secondary: "#d4a62e", accent: "#f1c84f", role: "#fff0b0", label: "rgba(72, 16, 22, 0.84)" },
+  cpv: { primary: "#1e4b92", secondary: "#14315f", accent: "#f1cf54", role: "#fff2a5", label: "rgba(10, 29, 61, 0.84)" },
+  ksa: { primary: "#0d6a43", secondary: "#0a4b31", accent: "#f5fbf7", role: "#fff9e5", label: "rgba(6, 45, 31, 0.84)" },
+  uru: { primary: "#6fb3dc", secondary: "#f5f7f8", accent: "#d5a833", role: "#08233a", label: "rgba(13, 43, 67, 0.84)" },
+  fra: { primary: "#193d7a", secondary: "#1f55a0", accent: "#c23843", role: "#fff9e5", label: "rgba(10, 28, 60, 0.84)" },
+  sen: { primary: "#0d6a43", secondary: "#d1a530", accent: "#b52a36", role: "#fff6bf", label: "rgba(7, 47, 32, 0.84)" },
+  irq: { primary: "#a3222f", secondary: "#151a20", accent: "#f4f0e8", role: "#fff9e5", label: "rgba(58, 14, 22, 0.84)" },
+  nor: { primary: "#a72a36", secondary: "#1b3b70", accent: "#f3f7fb", role: "#fff9e5", label: "rgba(54, 20, 42, 0.84)" },
+  arg: { primary: "#78bde5", secondary: "#f5f8fb", accent: "#d6ab45", role: "#0b2a43", label: "rgba(15, 49, 73, 0.84)" },
+  alg: { primary: "#12643f", secondary: "#f3f1e9", accent: "#b52a35", role: "#fff9e5", label: "rgba(8, 47, 32, 0.84)" },
+  aut: { primary: "#b42935", secondary: "#f3f0e8", accent: "#fff7ed", role: "#fff9e5", label: "rgba(77, 17, 24, 0.84)" },
+  jor: { primary: "#111820", secondary: "#1f6a43", accent: "#b52c36", role: "#f5f5ef", label: "rgba(8, 12, 16, 0.86)" },
+  por: { primary: "#9f2632", secondary: "#14623f", accent: "#f0c74d", role: "#fff4c2", label: "rgba(65, 17, 25, 0.84)" },
+  cod: { primary: "#2f79bd", secondary: "#174d84", accent: "#f1c94d", role: "#fff4b0", label: "rgba(12, 38, 67, 0.84)" },
+  uzb: { primary: "#1f82b7", secondary: "#16815a", accent: "#f3f7fb", role: "#fff9e5", label: "rgba(9, 45, 59, 0.84)" },
+  col: { primary: "#d4a72d", secondary: "#1e4a8c", accent: "#b42935", role: "#17130b", label: "rgba(54, 39, 17, 0.84)" },
+  eng: { primary: "#f2f2ed", secondary: "#b72b38", accent: "#b72b38", role: "#111820", label: "rgba(48, 18, 25, 0.84)" },
+  cro: { primary: "#b62a36", secondary: "#1e4f8f", accent: "#f5f7fb", role: "#fff9e5", label: "rgba(57, 20, 45, 0.84)" },
+  gha: { primary: "#b42935", secondary: "#17613f", accent: "#f0c94d", role: "#fff1a6", label: "rgba(62, 20, 24, 0.84)" },
+  pan: { primary: "#f2f3ee", secondary: "#1e4f91", accent: "#b42b36", role: "#111820", label: "rgba(22, 31, 51, 0.84)" },
+};
 let playerSearchIndex = [];
 let timeMode = "rome";
 let playerDetailBackTarget = "home";
@@ -2363,7 +2420,7 @@ function renderLiveTeamSide(team = {}, side = "home") {
 function renderLiveDetailPanel(item, activeTab) {
   if (activeTab === "timeline") {
     return `
-      <section class="live-detail-panel" role="tabpanel" aria-label="Timeline partita">
+      <section class="live-detail-panel" role="tabpanel" aria-label="Tabellino partita">
         ${renderLiveTimeline(item.events, item.fixture?.fixture?.status, item.fixture?.teams)}
       </section>
     `;
@@ -2443,11 +2500,11 @@ function renderLiveScoreSheetGroup(title, rows) {
 function renderLiveTimeline(events = [], status = {}, teamsInfo = {}) {
   const rows = buildLiveTimelineRows(events, status, teamsInfo).slice(0, 32);
   if (!rows.length) {
-    return `<div class="live-data-fallback live-compact-fallback"><strong>Timeline in aggiornamento</strong></div>`;
+    return `<div class="live-data-fallback live-compact-fallback"><strong>Tabellino in aggiornamento</strong></div>`;
   }
 
   return `
-    <div class="live-timeline" aria-label="Timeline eventi live">
+    <div class="live-timeline" aria-label="Tabellino eventi live">
       ${rows
         .map(
           (row) => `
@@ -2713,33 +2770,42 @@ function renderLiveLineupsDetail(item = {}) {
   }
 
   const fixture = item.fixture?.fixture || {};
+  const fixtureTeams = item.fixture?.teams || {};
   const referee = fixture.referee || item.referee || unavailableText;
   const temperature = formatLiveTemperature(item.weather?.temperature || fixture.weather?.temperature || fixture.weather?.temp);
-  const homeLineup = lineups[0];
-  const awayLineup = lineups[1];
-  const pitchTeams = [awayLineup ? renderLivePitchTeam(awayLineup, "away") : "", homeLineup ? renderLivePitchTeam(homeLineup, "home") : ""].join("");
+  const homeLineup = findLiveLineupForTeam(lineups, fixtureTeams.home?.name) || lineups[0];
+  const awayLineup = findLiveLineupForTeam(lineups, fixtureTeams.away?.name) || lineups.find((lineup) => lineup !== homeLineup);
+  const pitchTeams = [homeLineup ? renderLivePitchTeam(homeLineup, "home") : "", awayLineup ? renderLivePitchTeam(awayLineup, "away") : ""].join("");
+  const benches = [homeLineup, awayLineup].filter(Boolean).map(renderLiveBench).join("");
 
   return `
       <div class="live-lineups-detail">
+      <div class="live-pitch" aria-label="Campo con formazioni ufficiali">
+        ${pitchTeams}
+      </div>
       <div class="live-bench-grid">
-        ${lineups.map(renderLiveBench).join("")}
+        ${benches}
       </div>
       <div class="live-match-officials">
         <div><span>Arbitro</span><strong>${escapeHtml(referee)}</strong></div>
         <div><span>Temperatura</span><strong>${escapeHtml(temperature)}</strong></div>
       </div>
-      <div class="live-pitch" aria-label="Campo con formazioni ufficiali">
-        ${pitchTeams}
-      </div>
     </div>
   `;
+}
+
+function findLiveLineupForTeam(lineups = [], teamName = "") {
+  const normalizedTeamName = normalizePlayerName(teamName);
+  if (!normalizedTeamName) return null;
+  return lineups.find((lineup) => normalizePlayerName(lineup.team?.name) === normalizedTeamName) || null;
 }
 
 function renderLivePitchTeam(lineup = {}, side = "home") {
   const rows = buildLiveLineupRows(lineup);
   const localTeam = findTeamByApiName(lineup.team?.name);
+  const themeStyle = renderLiveLineupThemeStyle(localTeam?.id);
   return `
-    <section class="live-pitch-team is-${escapeAttribute(side)}">
+    <section class="live-pitch-team is-${escapeAttribute(side)}" style="${themeStyle}">
       <div class="live-pitch-team-head">
         <strong>${escapeHtml(lineup.team?.name || unavailableText)}</strong>
         <span>${escapeHtml(lineup.formation || "Modulo non disponibile")}</span>
@@ -2760,12 +2826,27 @@ function renderLivePitchTeam(lineup = {}, side = "home") {
   `;
 }
 
+function renderLiveLineupThemeStyle(teamId = "") {
+  const theme = { ...liveLineupFallbackTheme, ...(liveLineupTeamThemes[teamId] || {}) };
+  return [
+    ["--live-dot-primary", theme.primary],
+    ["--live-dot-secondary", theme.secondary],
+    ["--live-dot-accent", theme.accent],
+    ["--live-dot-role-color", theme.role],
+    ["--live-dot-label-bg", theme.label],
+  ]
+    .map(([name, value]) => `${name}: ${escapeAttribute(value)}`)
+    .join("; ");
+}
+
 function renderLivePlayerDot(player = {}, teamId = "") {
   const name = player.name || unavailableText;
   const position = player.pos || "";
+  const displayName = shortenLivePlayerName(name);
+  const nameClass = getLivePlayerNameClass(displayName);
   return `
     <button
-      class="live-player-dot"
+      class="live-player-dot ${nameClass}"
       type="button"
       title="${escapeAttribute(name)}"
       data-live-lineup-player="${escapeAttribute(name)}"
@@ -2773,7 +2854,7 @@ function renderLivePlayerDot(player = {}, teamId = "") {
       data-live-lineup-role="${escapeAttribute(position)}"
     >
       <span>${escapeHtml(position || "XI")}</span>
-      <strong>${escapeHtml(shortenLivePlayerName(name))}</strong>
+      <strong>${escapeHtml(displayName)}</strong>
     </button>
   `;
 }
@@ -2908,9 +2989,42 @@ function renderLiveLineupMissingPlayerState(playerName = "", teamId = "", role =
 }
 
 function shortenLivePlayerName(name = "") {
-  const parts = String(name).trim().split(/\s+/).filter(Boolean);
-  if (parts.length <= 1) return name;
-  return parts[parts.length - 1].length >= 3 ? parts[parts.length - 1] : name;
+  const cleanName = String(name).trim().replace(/\s+/g, " ");
+  const normalizedName = normalizePlayerName(cleanName);
+  const preferredNames = {
+    "vinicius junior": "Vinicius",
+    "vini junior": "Vini Jr",
+    "youssef en nesyri": "En-Nesyri",
+    "kevin de bruyne": "De Bruyne",
+    "virgil van dijk": "Van Dijk",
+    "angel di maria": "Di Maria",
+  };
+  if (preferredNames[normalizedName]) return preferredNames[normalizedName];
+
+  const parts = cleanName.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return cleanName;
+
+  const suffixes = new Set(["jr", "jr.", "junior", "filho", "neto", "ii", "iii", "iv"]);
+  const lastPart = parts[parts.length - 1];
+  const lastNormalized = normalizePlayerName(lastPart);
+  if (suffixes.has(lastNormalized)) {
+    return parts[0];
+  }
+
+  const surnameParticles = new Set(["al", "da", "de", "del", "di", "dos", "el", "la", "le", "van", "von"]);
+  const previousPart = parts[parts.length - 2];
+  if (previousPart && surnameParticles.has(normalizePlayerName(previousPart))) {
+    return `${previousPart} ${lastPart}`;
+  }
+
+  return lastPart.length >= 3 ? lastPart : cleanName;
+}
+
+function getLivePlayerNameClass(displayName = "") {
+  const length = String(displayName).length;
+  if (length >= 12) return "is-name-tight";
+  if (length >= 10) return "is-name-compact";
+  return "";
 }
 
 function formatLiveTemperature(value) {

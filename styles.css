@@ -2147,10 +2147,26 @@ select option {
 
 .live-timeline {
   position: relative;
-  max-height: min(66dvh, 600px);
+  max-height: min(68dvh, 640px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 7px 2px 12px;
+  padding: 10px 4px 14px;
+  scrollbar-color: rgba(241, 196, 93, 0.56) rgba(255, 255, 255, 0.06);
+  scrollbar-width: thin;
+}
+
+.live-timeline::-webkit-scrollbar {
+  width: 6px;
+}
+
+.live-timeline::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+}
+
+.live-timeline::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(241, 196, 93, 0.5);
 }
 
 .live-timeline::before {
@@ -2172,11 +2188,11 @@ select option {
 .live-timeline-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 52px minmax(0, 1fr);
+  gap: 12px;
   align-items: center;
-  min-height: 68px;
-  padding: 10px 0;
+  min-height: 72px;
+  padding: 11px 0;
 }
 
 .live-timeline-event {
@@ -2195,18 +2211,18 @@ select option {
 .live-timeline-card {
   position: relative;
   display: inline-flex;
-  gap: 8px;
+  gap: 9px;
   align-items: flex-start;
   max-width: 100%;
-  padding: 10px 11px;
-  border: 1px solid rgba(241, 196, 93, 0.24);
+  padding: 10px 12px;
+  border: 1px solid rgba(241, 196, 93, 0.28);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(241, 196, 93, 0.14), transparent 50%),
-    rgba(8, 13, 20, 0.8);
+    linear-gradient(135deg, rgba(241, 196, 93, 0.16), transparent 52%),
+    rgba(8, 13, 20, 0.84);
   box-shadow:
-    inset 0 1px 0 rgba(255, 245, 205, 0.04),
-    0 10px 22px rgba(0, 0, 0, 0.2);
+    inset 0 1px 0 rgba(255, 245, 205, 0.06),
+    0 11px 23px rgba(0, 0, 0, 0.22);
   vertical-align: middle;
 }
 
@@ -2229,7 +2245,7 @@ select option {
 .live-timeline-copy {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 4px;
 }
 
 .is-home .live-timeline-card::after,
@@ -2259,16 +2275,16 @@ select option {
 .live-timeline-copy strong {
   display: block;
   color: #fff9e5;
-  font-size: 0.83rem;
-  line-height: 1.18;
+  font-size: 0.86rem;
+  line-height: 1.22;
 }
 
 .live-timeline-copy small {
   display: block;
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   font-weight: 760;
-  line-height: 1.3;
+  line-height: 1.34;
 }
 
 .live-timeline-center {
@@ -2281,15 +2297,15 @@ select option {
 .live-timeline-center span {
   display: inline-grid;
   place-items: center;
-  min-width: 42px;
-  min-height: 31px;
+  min-width: 44px;
+  min-height: 32px;
   padding: 0 6px;
   border: 1px solid rgba(241, 196, 93, 0.62);
   border-radius: 999px;
   background:
     linear-gradient(180deg, rgba(21, 31, 44, 0.98), rgba(8, 13, 20, 0.98));
   color: var(--gold);
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   font-weight: 1000;
   box-shadow:
     inset 0 1px 0 rgba(255, 245, 205, 0.08),
@@ -2302,9 +2318,9 @@ select option {
   justify-self: center;
   position: relative;
   z-index: 1;
-  max-width: min(260px, 82%);
-  margin-top: -2px;
-  padding: 6px 12px;
+  max-width: min(280px, 84%);
+  margin-top: -1px;
+  padding: 7px 13px;
   border: 1px solid rgba(55, 208, 127, 0.34);
   border-radius: 999px;
   background:
@@ -2316,7 +2332,8 @@ select option {
 
 .live-timeline-system strong {
   color: #8cf0b7;
-  font-size: 0.72rem;
+  font-size: 0.74rem;
+  line-height: 1.2;
 }
 
 .live-timeline-row.is-recovery .live-timeline-system {
@@ -2503,12 +2520,16 @@ select option {
 
 .live-pitch-team {
   position: relative;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 9px;
   min-width: 0;
   min-height: 0;
   padding: 12px 0;
+}
+
+.live-pitch-team.is-away .live-pitch-team-head {
+  order: 2;
 }
 
 .live-pitch-team::before,
@@ -2534,25 +2555,25 @@ select option {
   transform: translateX(-50%);
 }
 
-.live-pitch-team.is-away::before {
+.live-pitch-team.is-home::before {
   top: 0;
   border-top: 0;
   border-radius: 0 0 7px 7px;
 }
 
-.live-pitch-team.is-away::after {
+.live-pitch-team.is-home::after {
   top: 0;
   border-top: 0;
   border-radius: 0 0 6px 6px;
 }
 
-.live-pitch-team.is-home::before {
+.live-pitch-team.is-away::before {
   bottom: 0;
   border-bottom: 0;
   border-radius: 7px 7px 0 0;
 }
 
-.live-pitch-team.is-home::after {
+.live-pitch-team.is-away::after {
   bottom: 0;
   border-bottom: 0;
   border-radius: 6px 6px 0 0;
@@ -2578,7 +2599,7 @@ select option {
   transform: translateX(-50%);
 }
 
-.live-pitch-team.is-away .live-pitch-goal {
+.live-pitch-team.is-home .live-pitch-goal {
   top: -4px;
   bottom: auto;
   border: 1px solid rgba(255, 239, 190, 0.7);
@@ -2616,6 +2637,7 @@ select option {
 
 .live-pitch-lines {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column-reverse;
   justify-content: space-between;
   gap: 18px;
@@ -2624,6 +2646,10 @@ select option {
 }
 
 .live-pitch-team.is-away .live-pitch-lines {
+  order: 1;
+}
+
+.live-pitch-team.is-home .live-pitch-lines {
   flex-direction: column;
   padding: 10px 0 20px;
 }
@@ -2632,7 +2658,12 @@ select option {
   display: grid;
   gap: 8px;
   align-items: center;
+  min-width: 0;
   width: 100%;
+}
+
+.live-pitch-line > .live-player-dot {
+  min-width: 0;
 }
 
 .live-pitch-line:first-child {
@@ -2661,7 +2692,9 @@ select option {
   display: grid;
   justify-items: center;
   gap: 5px;
+  width: 100%;
   min-width: 0;
+  overflow: visible;
   padding: 0 2px;
   background: transparent;
   color: inherit;
@@ -2677,7 +2710,7 @@ select option {
 
 .live-player-dot:hover span,
 .live-player-dot:focus-visible span {
-  border-color: rgba(255, 239, 190, 0.95);
+  border-color: rgba(255, 249, 229, 0.95);
   box-shadow:
     0 0 0 2px rgba(8, 13, 20, 0.48),
     0 0 0 4px rgba(241, 196, 93, 0.2),
@@ -2689,33 +2722,52 @@ select option {
   place-items: center;
   width: 30px;
   height: 30px;
-  border: 1px solid rgba(255, 216, 106, 0.78);
+  border: 1px solid var(--live-dot-accent, rgba(255, 216, 106, 0.78));
   border-radius: 50%;
   background:
-    radial-gradient(circle at 35% 24%, rgba(255, 249, 229, 0.2), transparent 34%),
-    rgba(8, 13, 20, 0.9);
-  color: var(--gold);
+    radial-gradient(circle at 35% 24%, rgba(255, 249, 229, 0.32), transparent 34%),
+    linear-gradient(
+      145deg,
+      var(--live-dot-primary, rgba(8, 13, 20, 0.9)) 0 58%,
+      var(--live-dot-secondary, rgba(8, 13, 20, 0.9)) 59% 82%,
+      var(--live-dot-accent, #ffd86a) 83% 100%
+    );
+  color: var(--live-dot-role-color, var(--gold));
   font-size: 0.64rem;
   font-weight: 1000;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.64);
   box-shadow:
     0 0 0 2px rgba(8, 13, 20, 0.48),
-    0 8px 15px rgba(0, 0, 0, 0.34);
+    0 8px 15px rgba(0, 0, 0, 0.34),
+    inset 0 1px 7px rgba(255, 255, 255, 0.12);
 }
 
 .live-player-dot strong {
-  max-width: 100%;
-  overflow: hidden;
+  max-width: none;
+  overflow: visible;
   padding: 2px 5px;
-  border: 1px solid rgba(8, 13, 20, 0.5);
+  border: 1px solid var(--live-dot-accent, rgba(8, 13, 20, 0.5));
   border-radius: 999px;
-  background: rgba(8, 13, 20, 0.66);
+  background:
+    linear-gradient(145deg, rgba(8, 13, 20, 0.88), var(--live-dot-label-bg, rgba(8, 13, 20, 0.66)));
   color: #fff9e5;
   font-size: 0.7rem;
   font-weight: 900;
+  letter-spacing: 0;
   line-height: 1.15;
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.56);
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
+}
+
+.live-player-dot.is-name-compact strong {
+  padding-inline: 4px;
+  font-size: 0.64rem;
+}
+
+.live-player-dot.is-name-tight strong {
+  padding-inline: 3px;
+  font-size: 0.58rem;
 }
 
 .live-bench-grid {
@@ -4720,22 +4772,60 @@ button.match-card:disabled {
   }
 
   .live-timeline {
-    max-height: 360px;
+    max-height: min(62dvh, 430px);
+    padding: 8px 0 12px;
   }
 
   .live-timeline-row {
-    grid-template-columns: minmax(0, 1fr) 46px minmax(0, 1fr);
-    gap: 8px;
-    min-height: 66px;
+    grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr);
+    gap: 6px;
+    min-height: 72px;
+    padding: 10px 0;
   }
 
   .live-timeline-card {
-    padding: 9px 8px;
+    gap: 6px;
+    padding: 9px 7px;
   }
 
   .live-timeline-icon {
-    width: 23px;
-    height: 23px;
+    width: 22px;
+    height: 22px;
+    font-size: 0.76rem;
+  }
+
+  .live-timeline-copy {
+    gap: 3px;
+  }
+
+  .live-timeline-copy strong {
+    font-size: 0.76rem;
+    line-height: 1.2;
+  }
+
+  .live-timeline-copy small {
+    font-size: 0.68rem;
+    line-height: 1.28;
+  }
+
+  .live-timeline-center span {
+    min-width: 38px;
+    min-height: 29px;
+    padding: 0 5px;
+    font-size: 0.7rem;
+  }
+
+  .is-home .live-timeline-card::after,
+  .is-away .live-timeline-card::before {
+    width: 7px;
+  }
+
+  .is-home .live-timeline-card::after {
+    right: -8px;
+  }
+
+  .is-away .live-timeline-card::before {
+    left: -8px;
   }
 
   .live-pitch-team {
@@ -4750,6 +4840,14 @@ button.match-card:disabled {
 
   .live-player-dot strong {
     font-size: 0.64rem;
+  }
+
+  .live-player-dot.is-name-compact strong {
+    font-size: 0.61rem;
+  }
+
+  .live-player-dot.is-name-tight strong {
+    font-size: 0.56rem;
   }
 
   .live-info-stats-head {
