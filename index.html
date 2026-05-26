@@ -16,7 +16,7 @@
     <link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png" />
     <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
     <link rel="apple-touch-startup-image" href="assets/splash/splash-1170x2532.png" />
-    <link rel="stylesheet" href="styles.css?v=59" />
+    <link rel="stylesheet" href="styles.css?v=61" />
   </head>
   <body class="is-loading home-active">
     <div class="app-status" id="appStatus">Caricamento app...</div>
@@ -44,6 +44,9 @@
           </button>
           <button class="tab" data-tab="live" type="button">
             Match Live Center
+          </button>
+          <button class="tab" data-tab="statistics" type="button">
+            Statistiche
           </button>
           <button class="tab" data-tab="calendar" type="button">
             Calendario
@@ -178,7 +181,16 @@
           </div>
           <div class="live-status" id="liveStatus">Connessione ai dati live...</div>
           <div class="live-center-grid" id="liveCenter"></div>
-          <div class="live-tournament-grid" id="liveTournamentData" aria-label="Dati ufficiali Mondiali 2026"></div>
+        </section>
+
+        <section class="panel" id="statistics" aria-labelledby="statistics-title">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">FIFA World Cup 2026</p>
+              <h2 id="statistics-title">Statistiche Mondiale</h2>
+            </div>
+          </div>
+          <div class="world-cup-statistics-grid" id="worldCupStatistics" aria-label="Statistiche ufficiali Mondiali 2026"></div>
         </section>
 
         <section class="panel" id="calendar" aria-labelledby="calendar-title">
@@ -343,6 +355,6 @@
     </div>
 
     <script src="data.js?v=22"></script>
-    <script src="app.js?v=59"></script>
+    <script src="app.js?v=61"></script>
   </body>
 </html>

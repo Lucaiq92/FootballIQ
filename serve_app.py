@@ -24,6 +24,8 @@ API_FOOTBALL_ALLOWED_ENDPOINTS = {
     "leagues",
     "players",
     "players/topscorers",
+    "players/topyellowcards",
+    "players/topredcards",
     "players/profiles",
     "players/seasons",
     "players/squads",
@@ -45,6 +47,8 @@ WORLD_CUP_FALLBACK_MESSAGES = {
     "live": "Dati live Mondiali non disponibili al momento",
     "standings": "Classifica in aggiornamento",
     "top_scorers": "Capocannonieri disponibili dopo l'inizio del torneo",
+    "top_yellow_cards": "Classifica ammonizioni disponibile dopo l'inizio del torneo",
+    "top_red_cards": "Classifica espulsioni disponibile dopo l'inizio del torneo",
     "detail": "Dettaglio partita live non disponibile al momento",
     "statistics": "Statistiche partita in aggiornamento",
     "events": "Eventi partita in aggiornamento",
@@ -315,7 +319,17 @@ def sanitize_world_cup_proxy_params(endpoint, params):
     if endpoint == "leagues":
         return {"id": [resolve_world_cup_league_id()], "season": [WORLD_CUP_SEASON]}
 
-    if endpoint in {"fixtures", "teams", "standings", "players", "players/topscorers", "injuries", "teams/statistics"}:
+    if endpoint in {
+        "fixtures",
+        "teams",
+        "standings",
+        "players",
+        "players/topscorers",
+        "players/topyellowcards",
+        "players/topredcards",
+        "injuries",
+        "teams/statistics",
+    }:
         sanitized = {key: values for key, values in params.items() if key not in {"league", "season"}}
         sanitized.update({"league": [resolve_world_cup_league_id()], "season": [WORLD_CUP_SEASON]})
         return sanitized
@@ -335,7 +349,16 @@ def sanitize_world_cup_proxy_payload(endpoint, payload):
         payload["results"] = len(payload["response"])
         return payload
 
-    if endpoint in {"standings", "players/topscorers", "teams", "players", "injuries", "teams/statistics"}:
+    if endpoint in {
+        "standings",
+        "players/topscorers",
+        "players/topyellowcards",
+        "players/topredcards",
+        "teams",
+        "players",
+        "injuries",
+        "teams/statistics",
+    }:
         payload = dict(payload)
         response = []
         for item in payload.get("response") or []:
@@ -819,8 +842,40 @@ def handle_api_football_world_cup_top_scorers(handler, query):
         json_response(handler, world_cup_error_payload("top_scorers", exc, {"scorers": []}))
 
 
+def handle_api_football_world_cup_top_yellow_cards(handler, query):
+    try:
+        payload = api_football_request("players/topyellowcards", world_cup_fixture_params(), ttl=WORLD_CUP_GENERAL_TTL)
+        rows = payload.get("response") or []
+        json_response(
+            handler,
+            world_cup_success_payload(
+                "top_yellow_cards",
+                {"cards": rows},
+                message="" if rows else clean_api_message("top_yellow_cards"),
+            ),
+        )
+    except ApiFootballError as exc:
+        json_response(handler, world_cup_error_payload("top_yellow_cards", exc, {"cards": []}))
+
+
+def handle_api_football_world_cup_top_red_cards(handler, query):
+    try:
+        payload = api_football_request("players/topredcards", world_cup_fixture_params(), ttl=WORLD_CUP_GENERAL_TTL)
+        rows = payload.get("response") or []
+        json_response(
+            handler,
+            world_cup_success_payload(
+                "top_red_cards",
+                {"cards": rows},
+                message="" if rows else clean_api_message("top_red_cards"),
+            ),
+        )
+    except ApiFootballError as exc:
+        json_response(handler, world_cup_error_payload("top_red_cards", exc, {"cards": []}))
+
+
 def handle_api_football_world_cup_bootstrap(handler, query):
-    data = {"teams": [], "fixtures": [], "standings": [], "topScorers": []}
+    data = {"teams": [], "fixtures": [], "standings": [], "topScorers": [], "topYellowCards": [], "topRedCards": []}
     messages = {}
 
     calls = (
@@ -828,6 +883,8 @@ def handle_api_football_world_cup_bootstrap(handler, query):
         ("fixtures", "fixtures", world_cup_fixture_params(), WORLD_CUP_STATIC_TTL, "generic"),
         ("standings", "standings", world_cup_fixture_params(), WORLD_CUP_GENERAL_TTL, "standings"),
         ("players/topscorers", "topScorers", world_cup_fixture_params(), WORLD_CUP_GENERAL_TTL, "top_scorers"),
+        ("players/topyellowcards", "topYellowCards", world_cup_fixture_params(), WORLD_CUP_GENERAL_TTL, "top_yellow_cards"),
+        ("players/topredcards", "topRedCards", world_cup_fixture_params(), WORLD_CUP_GENERAL_TTL, "top_red_cards"),
     )
 
     for endpoint, key, params, ttl, scope in calls:
@@ -973,6 +1030,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api-football/world-cup/top-scorers":
             handle_api_football_world_cup_top_scorers(self, parsed.query)
+            return
+
+        if parsed.path == "/api-football/world-cup/top-yellow-cards":
+            handle_api_football_world_cup_top_yellow_cards(self, parsed.query)
+            return
+
+        if parsed.path == "/api-football/world-cup/top-red-cards":
+            handle_api_football_world_cup_top_red_cards(self, parsed.query)
             return
 
         if parsed.path == "/api-football/player-profile":
