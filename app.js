@@ -1029,6 +1029,16 @@ function bindEvents() {
       return;
     }
 
+    const lineupPlayerButton = event.target.closest?.("[data-live-lineup-player]");
+    if (lineupPlayerButton) {
+      openLiveLineupPlayer(
+        lineupPlayerButton.dataset.liveLineupPlayer,
+        lineupPlayerButton.dataset.liveLineupTeamId,
+        lineupPlayerButton.dataset.liveLineupRole,
+      );
+      return;
+    }
+
     const matchButton = event.target.closest?.("[data-live-match-id]");
     if (matchButton) {
       activeLiveDetailId = matchButton.dataset.liveMatchId || null;
@@ -1069,6 +1079,11 @@ function bindEvents() {
   });
   safeAddEventListener(selectors.matchDetailBack, "click", () => showPanel("calendar", { updateRoute: true }));
   safeAddEventListener(selectors.playerDetailBack, "click", () => {
+    if (playerDetailBackTarget === "live") {
+      showPanel("live", { updateRoute: true });
+      return;
+    }
+
     if (playerDetailBackTarget === "teamDetail") {
       const teamId = selectors.playerDetail?.dataset.backTeamId || selectors.playerDetail?.dataset.squadTeamId || "";
       if (teamId && teamById.has(teamId)) {
@@ -1229,6 +1244,14 @@ function syncRouteToView(options = {}) {
       return;
     }
 
+    if (route.liveLineupPlayer) {
+      openLiveLineupPlayer(route.liveLineupPlayer, route.teamId || "", route.roleGroup || "", {
+        updateRoute: false,
+        scroll: options.scroll,
+      });
+      return;
+    }
+
     if (route.squadPlayer && route.teamId) {
       openSquadPlayerDetail(route.squadPlayer, route.teamId, route.roleGroup || "", {
         backTarget: route.backTarget || "teamDetail",
@@ -1318,7 +1341,22 @@ function parseRoute(value) {
       roleGroup: params.get("role") || "",
       matchId: null,
       teamId: teamId && teamById.has(teamId) ? teamId : null,
-      backTarget: backTarget === "home" ? "home" : "teamDetail",
+      backTarget: backTarget === "home" ? "home" : backTarget === "live" ? "live" : "teamDetail",
+    };
+  }
+
+  if (decodedPanel === "live-player") {
+    const liveLineupPlayer = params.get("name") || "";
+    const teamId = params.get("team");
+    return {
+      panel: liveLineupPlayer ? "playerDetail" : "home",
+      playerId: null,
+      liveLineupPlayer,
+      squadPlayer: "",
+      roleGroup: params.get("role") || "",
+      matchId: null,
+      teamId: teamId && teamById.has(teamId) ? teamId : null,
+      backTarget: "live",
     };
   }
 
@@ -1343,7 +1381,7 @@ function decodeRouteValue(value = "") {
 }
 
 function normalizePlayerBackTarget(value) {
-  return value === "teamDetail" ? "teamDetail" : "home";
+  return value === "teamDetail" || value === "live" ? value : "home";
 }
 
 function updateRoute(panelId) {
@@ -1373,7 +1411,16 @@ function applyRouteState() {
 function buildRouteHash(panelId, route = {}) {
   if (panelId === "playerDetail" && route.playerId && playerProfiles?.[route.playerId]) {
     const from = normalizePlayerBackTarget(route.backTarget);
-    return `#player-${encodeURIComponent(route.playerId)}${from === "teamDetail" ? "?from=teamDetail" : ""}`;
+    return `#player-${encodeURIComponent(route.playerId)}${from !== "home" ? `?from=${encodeURIComponent(from)}` : ""}`;
+  }
+
+  if (panelId === "playerDetail" && route.liveLineupPlayer) {
+    const params = new URLSearchParams();
+    params.set("name", route.liveLineupPlayer);
+    if (route.teamId && teamById.has(route.teamId)) params.set("team", route.teamId);
+    if (route.roleGroup) params.set("role", route.roleGroup);
+    params.set("from", "live");
+    return `#live-player?${params.toString()}`;
   }
 
   if (panelId === "playerDetail" && route.squadPlayer && route.teamId && teamById.has(route.teamId)) {
@@ -1381,7 +1428,7 @@ function buildRouteHash(panelId, route = {}) {
     params.set("team", route.teamId);
     params.set("name", route.squadPlayer);
     if (route.roleGroup) params.set("role", route.roleGroup);
-    if (normalizePlayerBackTarget(route.backTarget) === "home") params.set("from", "home");
+    if (normalizePlayerBackTarget(route.backTarget) !== "teamDetail") params.set("from", normalizePlayerBackTarget(route.backTarget));
     return `#squad-player?${params.toString()}`;
   }
 
@@ -1437,6 +1484,24 @@ function updateSquadPlayerRoute(playerName, teamId, roleGroup = "", backTarget =
     teamId,
     roleGroup,
     backTarget,
+  });
+  storeRoute(nextHash);
+
+  if (window.location.hash !== nextHash) {
+    window.history.pushState(null, "", nextHash);
+  }
+
+  syncActiveTab("playerDetail");
+}
+
+function updateLiveLineupPlayerRoute(playerName, teamId = "", roleGroup = "") {
+  if (!playerName) return;
+
+  const nextHash = buildRouteHash("playerDetail", {
+    liveLineupPlayer: playerName,
+    teamId,
+    roleGroup,
+    backTarget: "live",
   });
   storeRoute(nextHash);
 
@@ -1782,7 +1847,7 @@ function getDemoLiveMatches() {
           id: 20260001,
           date: new Date().toISOString(),
           referee: "Daniele Orsato",
-          status: { short: "2H", long: "Second Half", elapsed: 73 },
+          status: { short: "FT", long: "Match Finished", elapsed: 90 },
           venue: { name: "MetLife Stadium", city: "New York / New Jersey" },
         },
         league: { id: 1, name: "FIFA World Cup", season: worldCupSeason },
@@ -2299,7 +2364,7 @@ function renderLiveDetailPanel(item, activeTab) {
   if (activeTab === "timeline") {
     return `
       <section class="live-detail-panel" role="tabpanel" aria-label="Timeline partita">
-        ${renderLiveTimeline(item.events, item.fixture?.fixture?.status)}
+        ${renderLiveTimeline(item.events, item.fixture?.fixture?.status, item.fixture?.teams)}
       </section>
     `;
   }
@@ -2320,41 +2385,9 @@ function renderLiveDetailPanel(item, activeTab) {
 }
 
 function renderLiveInformationPanel(item = {}) {
-  const fixture = item.fixture?.fixture || {};
   const teamsInfo = item.fixture?.teams || {};
-  const goals = item.fixture?.goals || {};
-  const venue = fixture.venue?.name || "";
-  const mainEvents = buildLiveTimelineRows(item.events, fixture.status).slice(0, 8);
 
   return `
-    <div class="live-info-main">
-      <div class="live-info-kpis" aria-label="Sintesi live">
-        <div><span>Risultato</span><strong>${escapeHtml(formatLiveGoal(goals.home))} - ${escapeHtml(formatLiveGoal(goals.away))}</strong></div>
-        <div><span>Minuto</span><strong>${escapeHtml(formatLiveMinute(fixture.status))}</strong></div>
-        <div><span>Stato</span><strong>${escapeHtml(formatLiveStatus(fixture.status))}</strong></div>
-        ${venue ? `<div><span>Stadio</span><strong>${escapeHtml(venue)}</strong></div>` : ""}
-      </div>
-      <div class="live-info-feed">
-        <h3>Tabellino</h3>
-        ${renderLiveScoreSheet(item.events)}
-        <h3>Eventi principali</h3>
-        ${
-          mainEvents.length
-            ? `<div class="live-key-events">${mainEvents
-                .map(
-                  (row) => `
-                    <div class="live-key-event ${row.system ? "is-system" : ""}">
-                      <span>${escapeHtml(row.minute)}</span>
-                      <strong>${escapeHtml(row.primary)}</strong>
-                      ${row.secondary ? `<small>${escapeHtml(row.secondary)}</small>` : ""}
-                    </div>
-                  `,
-                )
-                .join("")}</div>`
-            : `<div class="live-data-fallback live-compact-fallback"><strong>Eventi principali in aggiornamento</strong></div>`
-        }
-      </div>
-    </div>
     <div class="live-info-stats-box">
       <div class="live-info-stats-head">
         <span>Statistiche live</span>
@@ -2407,8 +2440,8 @@ function renderLiveScoreSheetGroup(title, rows) {
   `;
 }
 
-function renderLiveTimeline(events = [], status = {}) {
-  const rows = buildLiveTimelineRows(events, status).slice(0, 18);
+function renderLiveTimeline(events = [], status = {}, teamsInfo = {}) {
+  const rows = buildLiveTimelineRows(events, status, teamsInfo).slice(0, 32);
   if (!rows.length) {
     return `<div class="live-data-fallback live-compact-fallback"><strong>Timeline in aggiornamento</strong></div>`;
   }
@@ -2418,12 +2451,17 @@ function renderLiveTimeline(events = [], status = {}) {
       ${rows
         .map(
           (row) => `
-            <div class="live-timeline-row ${row.system ? "is-system" : ""}">
-              <span>${escapeHtml(row.minute)}</span>
-              <div>
-                <strong>${escapeHtml(row.primary)}</strong>
-                ${row.secondary ? `<small>${escapeHtml(row.secondary)}</small>` : ""}
+            <div class="live-timeline-row ${row.system ? "is-system" : ""} is-${escapeAttribute(row.side || "center")} is-${escapeAttribute(row.group || "system")}">
+              <div class="live-timeline-event live-timeline-home">
+                ${row.side === "home" ? renderLiveTimelineEventContent(row) : ""}
               </div>
+              <div class="live-timeline-center">
+                <span>${escapeHtml(row.minute)}</span>
+              </div>
+              <div class="live-timeline-event live-timeline-away">
+                ${row.side === "away" ? renderLiveTimelineEventContent(row) : ""}
+              </div>
+              ${row.system ? `<div class="live-timeline-system"><strong>${escapeHtml(row.primary)}</strong></div>` : ""}
             </div>
           `,
         )
@@ -2432,33 +2470,88 @@ function renderLiveTimeline(events = [], status = {}) {
   `;
 }
 
-function buildLiveTimelineRows(events = [], status = {}) {
-  const rows = buildLiveEventRows(events);
+function renderLiveTimelineEventContent(row = {}) {
+  return `
+    <div class="live-timeline-card">
+      <span class="live-timeline-icon" aria-hidden="true">${escapeHtml(row.icon || "•")}</span>
+      <span class="live-timeline-copy">
+        <strong>${escapeHtml(row.primary)}</strong>
+        ${row.secondary ? `<small>${escapeHtml(row.secondary)}</small>` : ""}
+      </span>
+    </div>
+  `;
+}
+
+function buildLiveTimelineRows(events = [], status = {}, teamsInfo = {}) {
+  const rows = buildLiveEventRows(events, teamsInfo);
   const statusShort = String(status?.short || "").toUpperCase();
   const elapsed = Number(status?.elapsed || 0);
   const systemRows = [];
+  const matchStarted = rows.length || elapsed > 0 || ["1H", "HT", "2H", "ET", "BT", "P", "FT", "AET", "PEN"].includes(statusShort);
+  const firstHalfComplete = ["HT", "2H", "ET", "BT", "P", "FT", "AET", "PEN"].includes(statusShort) || elapsed >= 45;
+  const secondHalfStarted = ["2H", "ET", "BT", "P", "FT", "AET", "PEN"].includes(statusShort) || elapsed >= 46;
+  const matchFinished = ["FT", "AET", "PEN"].includes(statusShort);
+  const firstHalfExtra = getLivePeriodExtra(events, 45, Number(status?.extra || 0)) || 2;
+  const secondHalfExtra = getLivePeriodExtra(events, 90, Number(status?.extra || 0)) || 5;
 
-  if (["HT", "2H", "ET", "BT", "P", "FT", "AET", "PEN"].includes(statusShort) || elapsed >= 45) {
-    systemRows.push({ minute: "45'", order: 45.1, primary: "Intervallo", secondary: "", system: true });
+  if (matchStarted) {
+    systemRows.push({ minute: "0'", order: 0, primary: "Inizio partita", secondary: "", side: "center", group: "kickoff", system: true });
   }
-  if (["2H", "ET", "BT", "P", "FT", "AET", "PEN"].includes(statusShort) || elapsed >= 46) {
-    systemRows.push({ minute: "46'", order: 46, primary: "Inizio secondo tempo", secondary: "", system: true });
+
+  if (firstHalfComplete) {
+    systemRows.push({
+      minute: `+${firstHalfExtra}`,
+      order: 45.05,
+      primary: "Recupero primo tempo",
+      secondary: "",
+      side: "center",
+      group: "recovery",
+      system: true,
+    });
+    systemRows.push({ minute: "45'", order: 45.5, primary: "Fine primo tempo", secondary: "", side: "center", group: "phase", system: true });
   }
-  if (["FT", "AET", "PEN"].includes(statusShort)) {
-    systemRows.push({ minute: "90'", order: 90.5, primary: "Finita", secondary: "", system: true });
+
+  if (secondHalfStarted) {
+    systemRows.push({ minute: "46'", order: 46, primary: "Inizio secondo tempo", secondary: "", side: "center", group: "phase", system: true });
+  }
+
+  if (matchFinished || elapsed >= 90) {
+    systemRows.push({
+      minute: `+${secondHalfExtra}`,
+      order: 90.05,
+      primary: "Recupero secondo tempo",
+      secondary: "",
+      side: "center",
+      group: "recovery",
+      system: true,
+    });
+  }
+
+  if (matchFinished) {
+    systemRows.push({ minute: "90'", order: 90.6, primary: "Fine partita", secondary: "", side: "center", group: "finish", system: true });
   }
 
   return [...rows, ...systemRows].sort((a, b) => a.order - b.order);
 }
 
-function buildLiveEventRows(events = []) {
+function getLivePeriodExtra(events = [], periodEnd = 45, fallback = 0) {
+  const eventExtra = (events || []).reduce((max, event) => {
+    const elapsed = Number(event?.time?.elapsed || 0);
+    const extra = Number(event?.time?.extra || 0);
+    return elapsed === periodEnd && extra > max ? extra : max;
+  }, 0);
+
+  return eventExtra || (Number.isFinite(fallback) && fallback > 0 ? fallback : 0);
+}
+
+function buildLiveEventRows(events = [], teamsInfo = {}) {
   return (events || [])
-    .map(mapLiveEvent)
+    .map((event) => mapLiveEvent(event, teamsInfo))
     .filter(Boolean)
     .sort((a, b) => a.order - b.order);
 }
 
-function mapLiveEvent(event = {}) {
+function mapLiveEvent(event = {}, teamsInfo = {}) {
   const type = normalizePlayerName(event.type);
   const detail = normalizePlayerName(event.detail);
   const elapsed = Number(event.time?.elapsed || 0);
@@ -2469,13 +2562,16 @@ function mapLiveEvent(event = {}) {
   const assist = event.assist?.name || "";
   const detailText = String(event.detail || event.type || "Evento");
   const order = elapsed + extra / 10;
+  const side = getLiveEventSide(team, teamsInfo);
 
   if (type.includes("missed penalty") || detail.includes("missed penalty") || detail.includes("penalty missed")) {
     return {
       minute,
       order,
+      side,
       group: "penalty",
-      primary: `Rigore sbagliato ${team}`.trim(),
+      icon: "❌",
+      primary: "Rigore sbagliato",
       secondary: player,
     };
   }
@@ -2486,8 +2582,10 @@ function mapLiveEvent(event = {}) {
     return {
       minute,
       order,
+      side,
       group: isPenalty ? "penalty" : "goal",
-      primary: `${isOwnGoal ? "Autogol" : isPenalty ? "Rigore segnato" : "Gol"} ${team}`.trim(),
+      icon: isPenalty ? "✅" : "⚽",
+      primary: isOwnGoal ? "Autogol" : isPenalty ? "Rigore segnato" : "Gol",
       secondary: [player, assist ? `assist ${assist}` : ""].filter(Boolean).join(" - "),
     };
   }
@@ -2498,8 +2596,10 @@ function mapLiveEvent(event = {}) {
     return {
       minute,
       order,
+      side,
       group: "card",
-      primary: `${isRed ? "Espulsione" : isYellow ? "Ammonizione" : detailText} ${team}`.trim(),
+      icon: isRed ? "🟥" : "🟨",
+      primary: isRed ? "Espulsione" : isYellow ? "Ammonizione" : detailText,
       secondary: player,
     };
   }
@@ -2508,9 +2608,11 @@ function mapLiveEvent(event = {}) {
     return {
       minute,
       order,
+      side,
       group: "substitution",
-      primary: `Sostituzione ${team}`.trim(),
-      secondary: [player, assist ? `entra ${assist}` : ""].filter(Boolean).join(" - "),
+      icon: "🔁",
+      primary: "Sostituzione",
+      secondary: [assist ? `Entra ${assist}` : "", player ? `Esce ${player}` : ""].filter(Boolean).join(" - "),
     };
   }
 
@@ -2518,13 +2620,24 @@ function mapLiveEvent(event = {}) {
     return {
       minute,
       order,
+      side,
       group: "penalty",
+      icon: detail.includes("miss") ? "❌" : "✅",
       primary: detailText,
       secondary: [team, player].filter(Boolean).join(" - "),
     };
   }
 
   return null;
+}
+
+function getLiveEventSide(teamName = "", teamsInfo = {}) {
+  const normalizedTeam = normalizePlayerName(teamName);
+  const home = normalizePlayerName(teamsInfo?.home?.name);
+  const away = normalizePlayerName(teamsInfo?.away?.name);
+  if (normalizedTeam && normalizedTeam === home) return "home";
+  if (normalizedTeam && normalizedTeam === away) return "away";
+  return "center";
 }
 
 function renderLiveInjuries(injuries = []) {
@@ -2602,12 +2715,12 @@ function renderLiveLineupsDetail(item = {}) {
   const fixture = item.fixture?.fixture || {};
   const referee = fixture.referee || item.referee || unavailableText;
   const temperature = formatLiveTemperature(item.weather?.temperature || fixture.weather?.temperature || fixture.weather?.temp);
+  const homeLineup = lineups[0];
+  const awayLineup = lineups[1];
+  const pitchTeams = [awayLineup ? renderLivePitchTeam(awayLineup, "away") : "", homeLineup ? renderLivePitchTeam(homeLineup, "home") : ""].join("");
 
   return `
-    <div class="live-lineups-detail">
-      <div class="live-pitch" aria-label="Campo con formazioni ufficiali">
-        ${lineups.map(renderLivePitchTeam).join("")}
-      </div>
+      <div class="live-lineups-detail">
       <div class="live-bench-grid">
         ${lineups.map(renderLiveBench).join("")}
       </div>
@@ -2615,24 +2728,29 @@ function renderLiveLineupsDetail(item = {}) {
         <div><span>Arbitro</span><strong>${escapeHtml(referee)}</strong></div>
         <div><span>Temperatura</span><strong>${escapeHtml(temperature)}</strong></div>
       </div>
+      <div class="live-pitch" aria-label="Campo con formazioni ufficiali">
+        ${pitchTeams}
+      </div>
     </div>
   `;
 }
 
-function renderLivePitchTeam(lineup = {}) {
+function renderLivePitchTeam(lineup = {}, side = "home") {
   const rows = buildLiveLineupRows(lineup);
+  const localTeam = findTeamByApiName(lineup.team?.name);
   return `
-    <section class="live-pitch-team">
+    <section class="live-pitch-team is-${escapeAttribute(side)}">
       <div class="live-pitch-team-head">
         <strong>${escapeHtml(lineup.team?.name || unavailableText)}</strong>
         <span>${escapeHtml(lineup.formation || "Modulo non disponibile")}</span>
       </div>
+      <span class="live-pitch-goal" aria-hidden="true"></span>
       <div class="live-pitch-lines">
         ${rows
           .map(
             (row) => `
               <div class="live-pitch-line" style="grid-template-columns: repeat(${Math.max(row.length, 1)}, minmax(0, 1fr));">
-                ${row.map((player) => renderLivePlayerDot(player)).join("")}
+                ${row.map((player) => renderLivePlayerDot(player, localTeam?.id || "")).join("")}
               </div>
             `,
           )
@@ -2642,14 +2760,21 @@ function renderLivePitchTeam(lineup = {}) {
   `;
 }
 
-function renderLivePlayerDot(player = {}) {
+function renderLivePlayerDot(player = {}, teamId = "") {
   const name = player.name || unavailableText;
   const position = player.pos || "";
   return `
-    <div class="live-player-dot" title="${escapeAttribute(name)}">
+    <button
+      class="live-player-dot"
+      type="button"
+      title="${escapeAttribute(name)}"
+      data-live-lineup-player="${escapeAttribute(name)}"
+      data-live-lineup-team-id="${escapeAttribute(teamId)}"
+      data-live-lineup-role="${escapeAttribute(position)}"
+    >
       <span>${escapeHtml(position || "XI")}</span>
       <strong>${escapeHtml(shortenLivePlayerName(name))}</strong>
-    </div>
+    </button>
   `;
 }
 
@@ -2710,6 +2835,8 @@ function parseLiveGrid(grid) {
 }
 
 function renderLiveBench(lineup = {}) {
+  const localTeam = findTeamByApiName(lineup.team?.name);
+  const teamId = localTeam?.id || "";
   const substitutes = (lineup.substitutes || [])
     .map((item) => item?.player?.name)
     .filter(Boolean)
@@ -2723,11 +2850,61 @@ function renderLiveBench(lineup = {}) {
       </div>
       ${
         substitutes.length
-          ? `<ul class="live-lineup-list">${substitutes.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ul>`
+          ? `<ul class="live-lineup-list">${substitutes
+              .map(
+                (name) => `
+                  <li>
+                    <button
+                      class="live-bench-player"
+                      type="button"
+                      data-live-lineup-player="${escapeAttribute(name)}"
+                      data-live-lineup-team-id="${escapeAttribute(teamId)}"
+                      data-live-lineup-role="Panchina"
+                    >
+                      ${escapeHtml(name)}
+                    </button>
+                  </li>
+                `,
+              )
+              .join("")}</ul>`
           : `<div class="live-data-fallback live-compact-fallback"><strong>Panchina non disponibile</strong></div>`
       }
     </section>
   `;
+}
+
+function openLiveLineupPlayer(playerName = "", teamId = "", role = "", options = {}) {
+  const profile = findPlayerProfileByName(playerName, teamId);
+  if (profile?.id) {
+    openPlayerDetail(profile.id, { backTarget: "live", updateRoute: options.updateRoute, scroll: options.scroll });
+    return;
+  }
+
+  if (!ensurePlayerDetailPanel()) return;
+  releaseFocusedControl();
+  playerDetailBackTarget = "live";
+  selectors.playerDetailBack.textContent = "Torna al Live Center";
+  selectors.playerDetail.dataset.squadPlayer = playerName || "";
+  selectors.playerDetail.dataset.squadTeamId = teamId || "";
+  selectors.playerDetail.dataset.backTeamId = teamId || "";
+  delete selectors.playerDetail.dataset.playerId;
+  selectors.playerDetailContent.innerHTML = renderLiveLineupMissingPlayerState(playerName, teamId, role);
+  if (options.updateRoute !== false) {
+    updateLiveLineupPlayerRoute(playerName, teamId, role);
+  }
+  showPanel("playerDetail");
+  if (options.scroll !== false) {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+
+function renderLiveLineupMissingPlayerState(playerName = "", teamId = "", role = "") {
+  const team = teamById.get(teamId);
+  const details = [playerName, team?.name, role].filter(Boolean).join(" - ");
+  return renderEmptyState(
+    "Scheda giocatore non ancora disponibile",
+    details || "Il profilo sara collegato appena disponibile nei dati locali.",
+  );
 }
 
 function shortenLivePlayerName(name = "") {
@@ -3310,6 +3487,17 @@ function renderAnalysisCard(model) {
         <strong>${escapeHtml(insight.goalTrend.label)}</strong>
         <p>${escapeHtml(insight.goalTrend.copy)}</p>
       </article>
+    </div>
+  `;
+}
+
+function renderAnalysisColorLegend() {
+  return `
+    <div class="analysis-color-legend" aria-label="Legenda colori AnalisiIQ">
+      <span><i class="legend-dot confidence-high"></i> Oro = fiducia alta</span>
+      <span><i class="legend-dot confidence-low"></i> Bronzo = fiducia media</span>
+      <span><i class="legend-dot confidence-mid"></i> Grigio = equilibrio/incertezza</span>
+      <span class="analysis-legend-note">Lettura dati: misura quanto gli ultimi dati statistici stanno dando fiducia alla lettura AnalisiIQ.</span>
     </div>
   `;
 }
@@ -3917,6 +4105,7 @@ function renderMatchDetail(model) {
           <h3>Lettura</h3>
           <p>${prediction.reason} ${expectedGoals.note}</p>
         </div>
+        ${renderAnalysisColorLegend()}
       </article>
       <article class="detail-block">
         <h3>xG stimato</h3>
@@ -4102,7 +4291,7 @@ function openPlayerDetail(playerId, options = {}) {
   if (!ensurePlayerDetailPanel()) return;
 
   const backTarget = options.backTarget || "home";
-  const backLabel = backTarget === "teamDetail" ? "Torna alla squadra" : "Torna a Home";
+  const backLabel = backTarget === "live" ? "Torna al Live Center" : backTarget === "teamDetail" ? "Torna alla squadra" : "Torna a Home";
   const profile = playerProfiles?.[playerId] || null;
   if (!profile) {
     delete selectors.playerDetail.dataset.playerId;
