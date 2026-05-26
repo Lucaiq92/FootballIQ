@@ -1,12 +1,12 @@
-const CACHE_NAME = "footballiq-shell-v61";
-const RUNTIME_CACHE = "footballiq-runtime-v61";
+const CACHE_NAME = "footballiq-shell-v64";
+const RUNTIME_CACHE = "footballiq-runtime-v64";
 
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=61",
+  "./styles.css?v=64",
   "./data.js",
-  "./app.js?v=61",
+  "./app.js?v=64",
   "./manifest.webmanifest",
   "./offline.html",
   "./assets/icons/icon-192.png",

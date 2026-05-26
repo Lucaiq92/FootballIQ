@@ -31,15 +31,23 @@ const worldCupSeason = Number(meta.worldCupSeason || 2026);
 const worldCupLeagueIds = new Set(["1", ...(meta.worldCupLeagueIds || []).map(String)]);
 const liveRefreshIntervalMs = 60000;
 const tournamentRefreshIntervalMs = 600000;
+const liveDemoQueryParam = "demoLive";
 const worldCupStatisticsTabs = [
   { id: "scorers", label: "Capocannonieri" },
   { id: "yellowCards", label: "Ammonizioni" },
   { id: "redCards", label: "Espulsioni" },
 ];
+const liveDetailTabs = [
+  { id: "info", label: "Informazioni" },
+  { id: "timeline", label: "Timeline" },
+  { id: "lineups", label: "Formazioni" },
+];
 let playerSearchIndex = [];
 let timeMode = "rome";
 let playerDetailBackTarget = "home";
 let activeWorldCupStatisticsTab = "scorers";
+let activeLiveDetailId = null;
+let activeLiveDetailTab = "info";
 let liveRefreshTimer = null;
 let tournamentRefreshTimer = null;
 
@@ -300,7 +308,7 @@ function setupAppMode() {
 
   if (canUseServiceWorker) {
     safeAddEventListener(window, "load", () => {
-      navigator.serviceWorker.register("./service-worker.js?v=61").catch(() => {});
+      navigator.serviceWorker.register("./service-worker.js?v=64").catch(() => {});
     });
   }
 }
@@ -590,8 +598,27 @@ function isWorldCupNewsItem(item = {}) {
   return text.includes("mondiali") || text.includes("world cup") || text.includes("fifa");
 }
 
+function isLiveDemoMode() {
+  try {
+    return new URLSearchParams(window.location.search || "").get(liveDemoQueryParam) === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
 async function loadLiveCenter(options = {}) {
   if (!selectors.liveCenter || apiFootballState.liveLoading) return;
+
+  if (isLiveDemoMode()) {
+    apiFootballState.checked = true;
+    apiFootballState.configured = true;
+    apiFootballState.liveLoading = false;
+    apiFootballState.liveError = "";
+    apiFootballState.liveMatches = getDemoLiveMatches();
+    apiFootballState.liveUpdatedAt = new Date().toISOString();
+    renderLiveCenter("Modalita demo Live Center - dati fittizi per test");
+    return;
+  }
 
   if (!apiFootballState.checked) {
     try {
@@ -985,6 +1012,29 @@ function bindEvents() {
   });
   safeAddEventListener(selectors.liveRefreshButton, "click", () => {
     loadLiveCenter({ force: true });
+  });
+  safeAddEventListener(selectors.liveCenter, "click", (event) => {
+    const backButton = event.target.closest?.("[data-live-detail-back]");
+    if (backButton) {
+      activeLiveDetailId = null;
+      activeLiveDetailTab = "info";
+      renderLiveCenter();
+      return;
+    }
+
+    const tabButton = event.target.closest?.("[data-live-detail-tab]");
+    if (tabButton) {
+      activeLiveDetailTab = tabButton.dataset.liveDetailTab || "info";
+      renderLiveCenter();
+      return;
+    }
+
+    const matchButton = event.target.closest?.("[data-live-match-id]");
+    if (matchButton) {
+      activeLiveDetailId = matchButton.dataset.liveMatchId || null;
+      activeLiveDetailTab = "info";
+      renderLiveCenter();
+    }
   });
   safeAddEventListener(selectors.worldCupStatistics, "click", (event) => {
     const button = event.target.closest?.("[data-world-cup-stat-tab]");
@@ -1661,6 +1711,16 @@ function openPlayerSearchResult(index) {
 function renderLiveCenter(statusMessage = "") {
   if (!selectors.liveCenter) return;
 
+  if (isLiveDemoMode() && !apiFootballState.liveMatches.length && !apiFootballState.liveLoading) {
+    apiFootballState.checked = true;
+    apiFootballState.configured = true;
+    apiFootballState.liveMatches = getDemoLiveMatches();
+    apiFootballState.liveUpdatedAt = new Date().toISOString();
+  }
+  if (isLiveDemoMode()) {
+    statusMessage = "Modalita demo Live Center - dati fittizi per test";
+  }
+
   if (selectors.liveStatus) {
     const updatedAt = apiFootballState.liveUpdatedAt ? ` - aggiornato ${formatLiveUpdateTime(apiFootballState.liveUpdatedAt)}` : "";
     selectors.liveStatus.textContent = statusMessage || apiFootballState.liveError || `Dati ufficiali Mondiali 2026${updatedAt}`;
@@ -1692,7 +1752,18 @@ function renderLiveCenter(statusMessage = "") {
     return;
   }
 
-  selectors.liveCenter.innerHTML = apiFootballState.liveMatches.map(renderLiveMatchCard).join("");
+  const activeMatch = activeLiveDetailId
+    ? apiFootballState.liveMatches.find((item) => getLiveMatchId(item) === activeLiveDetailId)
+    : null;
+
+  if (activeLiveDetailId && !activeMatch) {
+    activeLiveDetailId = null;
+    activeLiveDetailTab = "info";
+  }
+
+  selectors.liveCenter.innerHTML = activeMatch
+    ? renderLiveMatchDetail(activeMatch)
+    : apiFootballState.liveMatches.map(renderLiveMatchListCard).join("");
 }
 
 function renderLiveNoMatchesFallback() {
@@ -1701,6 +1772,183 @@ function renderLiveNoMatchesFallback() {
       <strong>Nessuna partita live dei Mondiali al momento</strong>
     </div>
   `;
+}
+
+function getDemoLiveMatches() {
+  return [
+    {
+      fixture: {
+        fixture: {
+          id: 20260001,
+          date: new Date().toISOString(),
+          referee: "Daniele Orsato",
+          status: { short: "2H", long: "Second Half", elapsed: 73 },
+          venue: { name: "MetLife Stadium", city: "New York / New Jersey" },
+        },
+        league: { id: 1, name: "FIFA World Cup", season: worldCupSeason },
+        teams: {
+          home: { id: 6, name: "Brasile", logo: flagUrl("br") },
+          away: { id: 8, name: "Marocco", logo: flagUrl("ma") },
+        },
+        goals: { home: 2, away: 1 },
+        score: { halftime: { home: 1, away: 0 }, fulltime: { home: null, away: null } },
+      },
+      events: [
+        {
+          time: { elapsed: 12 },
+          team: { name: "Brasile" },
+          player: { name: "Vinicius Junior" },
+          assist: { name: "Neymar" },
+          type: "Goal",
+          detail: "Normal Goal",
+        },
+        {
+          time: { elapsed: 28 },
+          team: { name: "Marocco" },
+          player: { name: "Achraf Hakimi" },
+          assist: { name: null },
+          type: "Card",
+          detail: "Yellow Card",
+        },
+        {
+          time: { elapsed: 41 },
+          team: { name: "Brasile" },
+          player: { name: "Rodrygo" },
+          assist: { name: null },
+          type: "Missed Penalty",
+          detail: "Penalty missed",
+        },
+        {
+          time: { elapsed: 54 },
+          team: { name: "Marocco" },
+          player: { name: "Youssef En-Nesyri" },
+          assist: { name: "Hakim Ziyech" },
+          type: "Goal",
+          detail: "Normal Goal",
+        },
+        {
+          time: { elapsed: 63 },
+          team: { name: "Brasile" },
+          player: { name: "Neymar" },
+          assist: { name: null },
+          type: "Goal",
+          detail: "Penalty",
+        },
+        {
+          time: { elapsed: 68 },
+          team: { name: "Marocco" },
+          player: { name: "Sofyan Amrabat" },
+          assist: { name: null },
+          type: "Card",
+          detail: "Red Card",
+        },
+        {
+          time: { elapsed: 73 },
+          team: { name: "Brasile" },
+          player: { name: "Rodrygo" },
+          assist: { name: "Raphinha" },
+          type: "subst",
+          detail: "Substitution 1",
+        },
+        {
+          time: { elapsed: 75 },
+          team: { name: "Marocco" },
+          player: { name: "Hakim Ziyech" },
+          assist: { name: "Abde Ezzalzouli" },
+          type: "subst",
+          detail: "Substitution 1",
+        },
+      ],
+      statistics: [
+        {
+          team: { name: "Brasile" },
+          statistics: [
+            { type: "Ball Possession", value: "58%" },
+            { type: "Total Shots", value: 14 },
+            { type: "Shots on Goal", value: 6 },
+            { type: "Corner Kicks", value: 5 },
+            { type: "Fouls", value: 9 },
+            { type: "expected_goals", value: "2.1" },
+          ],
+        },
+        {
+          team: { name: "Marocco" },
+          statistics: [
+            { type: "Ball Possession", value: "42%" },
+            { type: "Total Shots", value: 8 },
+            { type: "Shots on Goal", value: 3 },
+            { type: "Corner Kicks", value: 2 },
+            { type: "Fouls", value: 13 },
+            { type: "expected_goals", value: "0.9" },
+          ],
+        },
+      ],
+      lineups: [
+        {
+          team: { name: "Brasile" },
+          formation: "4-2-3-1",
+          startXI: [
+            { player: { name: "Alisson", pos: "G", grid: "1:1" } },
+            { player: { name: "Danilo", pos: "D", grid: "2:1" } },
+            { player: { name: "Marquinhos", pos: "D", grid: "2:2" } },
+            { player: { name: "Gabriel Magalhaes", pos: "D", grid: "2:3" } },
+            { player: { name: "Guilherme Arana", pos: "D", grid: "2:4" } },
+            { player: { name: "Casemiro", pos: "M", grid: "3:2" } },
+            { player: { name: "Bruno Guimaraes", pos: "M", grid: "3:3" } },
+            { player: { name: "Raphinha", pos: "M", grid: "4:1" } },
+            { player: { name: "Neymar", pos: "M", grid: "4:2" } },
+            { player: { name: "Vinicius Junior", pos: "M", grid: "4:3" } },
+            { player: { name: "Richarlison", pos: "F", grid: "5:2" } },
+          ],
+          substitutes: [
+            { player: { name: "Rodrygo" } },
+            { player: { name: "Endrick" } },
+            { player: { name: "Ederson" } },
+          ],
+        },
+        {
+          team: { name: "Marocco" },
+          formation: "4-3-3",
+          startXI: [
+            { player: { name: "Bono", pos: "G", grid: "1:1" } },
+            { player: { name: "Hakimi", pos: "D", grid: "2:1" } },
+            { player: { name: "Aguerd", pos: "D", grid: "2:2" } },
+            { player: { name: "Saiss", pos: "D", grid: "2:3" } },
+            { player: { name: "Mazraoui", pos: "D", grid: "2:4" } },
+            { player: { name: "Amrabat", pos: "M", grid: "3:1" } },
+            { player: { name: "Ounahi", pos: "M", grid: "3:2" } },
+            { player: { name: "Amallah", pos: "M", grid: "3:3" } },
+            { player: { name: "Ziyech", pos: "F", grid: "4:1" } },
+            { player: { name: "En-Nesyri", pos: "F", grid: "4:2" } },
+            { player: { name: "Boufal", pos: "F", grid: "4:3" } },
+          ],
+          substitutes: [
+            { player: { name: "Abde Ezzalzouli" } },
+            { player: { name: "Cheddira" } },
+            { player: { name: "Munir" } },
+          ],
+        },
+      ],
+      weather: { temperature: "22°C" },
+      injuries: [],
+      players: [
+        {
+          team: { name: "Brasile" },
+          players: [
+            { player: { name: "Neymar" }, statistics: [{ goals: { total: 1 }, cards: { yellow: 0, red: 0 } }] },
+            { player: { name: "Vinicius Junior" }, statistics: [{ goals: { total: 1 }, cards: { yellow: 0, red: 0 } }] },
+          ],
+        },
+        {
+          team: { name: "Marocco" },
+          players: [
+            { player: { name: "Youssef En-Nesyri" }, statistics: [{ goals: { total: 1 }, cards: { yellow: 0, red: 0 } }] },
+            { player: { name: "Sofyan Amrabat" }, statistics: [{ goals: { total: 0 }, cards: { yellow: 0, red: 1 } }] },
+          ],
+        },
+      ],
+    },
+  ];
 }
 
 function renderWorldCupStatistics() {
@@ -1928,70 +2176,355 @@ function renderLiveDataFallback(title, copy) {
   `;
 }
 
-function renderLiveMatchCard(item) {
+function getLiveMatchId(item = {}) {
+  const fixtureId = item.fixture?.fixture?.id;
+  if (fixtureId !== undefined && fixtureId !== null) return String(fixtureId);
+
+  const teamsInfo = item.fixture?.teams || {};
+  return [teamsInfo.home?.name, teamsInfo.away?.name, item.fixture?.fixture?.date].filter(Boolean).join("-");
+}
+
+function renderLiveMatchListCard(item) {
   const fixture = item.fixture?.fixture || {};
   const league = item.fixture?.league || {};
   const teamsInfo = item.fixture?.teams || {};
   const goals = item.fixture?.goals || {};
   const home = teamsInfo.home || {};
   const away = teamsInfo.away || {};
-  const elapsed = fixture.status?.elapsed ?? fixture.status?.extra ?? unavailableText;
-  const status = fixture.status?.short || fixture.status?.long || unavailableText;
+  const venue = fixture.venue?.name || item.fixture?.fixture?.venue?.name || "";
+  const elapsed = formatLiveMinute(fixture.status);
+  const status = formatLiveStatus(fixture.status);
+  const matchId = getLiveMatchId(item);
 
   return `
-    <article class="live-match-card">
-      <div class="live-match-head">
-        <span>${escapeHtml(league.name || unavailableText)}</span>
-        <span class="live-minute">${escapeHtml(elapsed === unavailableText ? status : `${elapsed}'`)}</span>
+    <button
+      class="live-match-card live-match-list-card"
+      type="button"
+      data-live-match-id="${escapeAttribute(matchId)}"
+      aria-label="Apri dettaglio live ${escapeAttribute([home.name, away.name].filter(Boolean).join(" contro "))}"
+    >
+      <div class="live-match-topline live-list-topline">
+        <div>
+          <span class="live-badge">LIVE</span>
+          <span>${escapeHtml(league.name || "FIFA World Cup 2026")}</span>
+        </div>
+        <strong>${escapeHtml(status)}</strong>
       </div>
-      <div class="live-scoreline">
-        <strong>${escapeHtml(home.name || unavailableText)}</strong>
-        <span class="live-score">${escapeHtml(formatLiveGoal(goals.home))} - ${escapeHtml(formatLiveGoal(goals.away))}</span>
-        <strong>${escapeHtml(away.name || unavailableText)}</strong>
+      <div class="live-scoreboard">
+        ${renderLiveTeamSide(home, "home")}
+        <div class="live-score-center">
+          <span class="live-minute">${escapeHtml(elapsed)}</span>
+          <strong>${escapeHtml(formatLiveGoal(goals.home))} - ${escapeHtml(formatLiveGoal(goals.away))}</strong>
+          ${venue ? `<small>${escapeHtml(venue)}</small>` : ""}
+        </div>
+        ${renderLiveTeamSide(away, "away")}
       </div>
-      <div class="live-detail-grid">
-        <section class="live-block">
-          <h3>Marcatori ed eventi</h3>
-          ${renderLiveEvents(item.events)}
-        </section>
-        <section class="live-block">
-          <h3>Statistiche live</h3>
-          ${renderLiveStatistics(item.statistics)}
-        </section>
-        <section class="live-block">
-          <h3>Formazioni ufficiali</h3>
-          ${renderLiveLineups(item.lineups)}
-        </section>
-        <section class="live-block">
-          <h3>Infortuni</h3>
-          ${renderLiveInjuries(item.injuries)}
-        </section>
-        <section class="live-block">
-          <h3>Giocatori</h3>
-          ${renderLivePlayerStats(item.players)}
-        </section>
+    </button>
+  `;
+}
+
+function renderLiveMatchDetail(item) {
+  const fixture = item.fixture?.fixture || {};
+  const teamsInfo = item.fixture?.teams || {};
+  const goals = item.fixture?.goals || {};
+  const home = teamsInfo.home || {};
+  const away = teamsInfo.away || {};
+  const venue = fixture.venue?.name || "";
+  const elapsed = formatLiveMinute(fixture.status);
+  const status = formatLiveStatus(fixture.status);
+  const activeTab = liveDetailTabs.some((tab) => tab.id === activeLiveDetailTab) ? activeLiveDetailTab : "info";
+
+  return `
+    <article class="live-match-detail">
+      <button class="live-detail-back" type="button" data-live-detail-back>
+        <span aria-hidden="true">&larr;</span>
+        Torna al Live Center
+      </button>
+      <div class="live-match-card live-detail-score-card">
+        <div class="live-match-topline">
+          <div>
+            <span class="live-badge">LIVE</span>
+            <span>${escapeHtml(status)}</span>
+          </div>
+          <strong>${escapeHtml(elapsed)}</strong>
+        </div>
+        <div class="live-scoreboard">
+          ${renderLiveTeamSide(home, "home")}
+          <div class="live-score-center">
+            <span class="live-minute">${escapeHtml(elapsed)}</span>
+            <strong>${escapeHtml(formatLiveGoal(goals.home))} - ${escapeHtml(formatLiveGoal(goals.away))}</strong>
+            ${venue ? `<small>${escapeHtml(venue)}</small>` : ""}
+          </div>
+          ${renderLiveTeamSide(away, "away")}
+        </div>
       </div>
+      <div class="live-detail-tabs" role="tablist" aria-label="Dettaglio partita live">
+        ${liveDetailTabs
+          .map(
+            (tab) => `
+              <button
+                class="live-detail-tab ${tab.id === activeTab ? "is-active" : ""}"
+                type="button"
+                role="tab"
+                aria-selected="${tab.id === activeTab ? "true" : "false"}"
+                data-live-detail-tab="${escapeAttribute(tab.id)}"
+              >
+                ${escapeHtml(tab.label)}
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+      ${renderLiveDetailPanel(item, activeTab)}
     </article>
   `;
 }
 
-function renderLiveEvents(events = []) {
-  const relevant = (events || []).filter((event) => {
-    const type = normalizePlayerName(event?.type);
-    const detail = normalizePlayerName(event?.detail);
-    return type.includes("goal") || type.includes("card") || type.includes("penalty") || detail.includes("penalty");
-  });
-  if (!relevant.length) return `<div class="live-event-row"><span>Eventi</span><strong>${unavailableText}</strong></div>`;
+function renderLiveTeamSide(team = {}, side = "home") {
+  const localTeam = findTeamByApiName(team.name);
+  const flag = localTeam?.flag ? flagUrl(localTeam.flag) : team.logo || "";
+  const crest = flag
+    ? `<img src="${escapeAttribute(flag)}" alt="" loading="lazy" decoding="async" />`
+    : `<span class="live-team-fallback">FIQ</span>`;
 
-  return relevant
-    .map((event) => {
-      const label = event.type === "Goal" ? (normalizePlayerName(event.detail).includes("penalty") ? "Rigore" : "Gol") : event.detail || event.type || "Evento";
-      const minute = event.time?.elapsed ? `${event.time.elapsed}'` : unavailableText;
-      const player = event.player?.name || unavailableText;
-      const team = event.team?.name || "";
-      return `<div class="live-event-row"><span>${escapeHtml(minute)} · ${escapeHtml(label)}</span><strong>${escapeHtml([player, team].filter(Boolean).join(" · "))}</strong></div>`;
-    })
-    .join("");
+  return `
+    <div class="live-team-side ${side === "away" ? "is-away" : ""}">
+      ${crest}
+      <strong>${escapeHtml(team.name || unavailableText)}</strong>
+    </div>
+  `;
+}
+
+function renderLiveDetailPanel(item, activeTab) {
+  if (activeTab === "timeline") {
+    return `
+      <section class="live-detail-panel" role="tabpanel" aria-label="Timeline partita">
+        ${renderLiveTimeline(item.events, item.fixture?.fixture?.status)}
+      </section>
+    `;
+  }
+
+  if (activeTab === "lineups") {
+    return `
+      <section class="live-detail-panel" role="tabpanel" aria-label="Formazioni ufficiali">
+        ${renderLiveLineupsDetail(item)}
+      </section>
+    `;
+  }
+
+  return `
+    <section class="live-detail-panel live-info-panel" role="tabpanel" aria-label="Informazioni partita">
+      ${renderLiveInformationPanel(item)}
+    </section>
+  `;
+}
+
+function renderLiveInformationPanel(item = {}) {
+  const fixture = item.fixture?.fixture || {};
+  const teamsInfo = item.fixture?.teams || {};
+  const goals = item.fixture?.goals || {};
+  const venue = fixture.venue?.name || "";
+  const mainEvents = buildLiveTimelineRows(item.events, fixture.status).slice(0, 8);
+
+  return `
+    <div class="live-info-main">
+      <div class="live-info-kpis" aria-label="Sintesi live">
+        <div><span>Risultato</span><strong>${escapeHtml(formatLiveGoal(goals.home))} - ${escapeHtml(formatLiveGoal(goals.away))}</strong></div>
+        <div><span>Minuto</span><strong>${escapeHtml(formatLiveMinute(fixture.status))}</strong></div>
+        <div><span>Stato</span><strong>${escapeHtml(formatLiveStatus(fixture.status))}</strong></div>
+        ${venue ? `<div><span>Stadio</span><strong>${escapeHtml(venue)}</strong></div>` : ""}
+      </div>
+      <div class="live-info-feed">
+        <h3>Tabellino</h3>
+        ${renderLiveScoreSheet(item.events)}
+        <h3>Eventi principali</h3>
+        ${
+          mainEvents.length
+            ? `<div class="live-key-events">${mainEvents
+                .map(
+                  (row) => `
+                    <div class="live-key-event ${row.system ? "is-system" : ""}">
+                      <span>${escapeHtml(row.minute)}</span>
+                      <strong>${escapeHtml(row.primary)}</strong>
+                      ${row.secondary ? `<small>${escapeHtml(row.secondary)}</small>` : ""}
+                    </div>
+                  `,
+                )
+                .join("")}</div>`
+            : `<div class="live-data-fallback live-compact-fallback"><strong>Eventi principali in aggiornamento</strong></div>`
+        }
+      </div>
+    </div>
+    <div class="live-info-stats-box">
+      <div class="live-info-stats-head">
+        <span>Statistiche live</span>
+        <strong>${escapeHtml(teamsInfo.home?.name || "Casa")} vs ${escapeHtml(teamsInfo.away?.name || "Trasferta")}</strong>
+      </div>
+      ${renderLiveStatistics(item.statistics, teamsInfo)}
+    </div>
+  `;
+}
+
+function renderLiveScoreSheet(events = []) {
+  const rows = buildLiveEventRows(events);
+  const goals = rows.filter((row) => row.group === "goal").slice(0, 8);
+  const cards = rows.filter((row) => row.group === "card").slice(0, 8);
+  const penalties = rows.filter((row) => row.group === "penalty").slice(0, 5);
+  const substitutions = rows.filter((row) => row.group === "substitution").slice(0, 5);
+
+  if (!goals.length && !cards.length && !penalties.length && !substitutions.length) {
+    return `<div class="live-data-fallback live-compact-fallback"><strong>Tabellino in aggiornamento</strong></div>`;
+  }
+
+  return `
+    <div class="live-score-sheet">
+      ${renderLiveScoreSheetGroup("Marcatori", goals)}
+      ${renderLiveScoreSheetGroup("Cartellini", cards)}
+      ${renderLiveScoreSheetGroup("Rigori", penalties)}
+      ${renderLiveScoreSheetGroup("Sostituzioni", substitutions)}
+    </div>
+  `;
+}
+
+function renderLiveScoreSheetGroup(title, rows) {
+  if (!rows.length) return "";
+
+  return `
+    <div class="live-score-sheet-group">
+      <span>${escapeHtml(title)}</span>
+      ${rows
+        .map(
+          (row) => `
+            <div class="live-score-sheet-row">
+              <small>${escapeHtml(row.minute)}</small>
+              <strong>${escapeHtml(row.primary)}</strong>
+              <em>${escapeHtml(row.secondary)}</em>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderLiveTimeline(events = [], status = {}) {
+  const rows = buildLiveTimelineRows(events, status).slice(0, 18);
+  if (!rows.length) {
+    return `<div class="live-data-fallback live-compact-fallback"><strong>Timeline in aggiornamento</strong></div>`;
+  }
+
+  return `
+    <div class="live-timeline" aria-label="Timeline eventi live">
+      ${rows
+        .map(
+          (row) => `
+            <div class="live-timeline-row ${row.system ? "is-system" : ""}">
+              <span>${escapeHtml(row.minute)}</span>
+              <div>
+                <strong>${escapeHtml(row.primary)}</strong>
+                ${row.secondary ? `<small>${escapeHtml(row.secondary)}</small>` : ""}
+              </div>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function buildLiveTimelineRows(events = [], status = {}) {
+  const rows = buildLiveEventRows(events);
+  const statusShort = String(status?.short || "").toUpperCase();
+  const elapsed = Number(status?.elapsed || 0);
+  const systemRows = [];
+
+  if (["HT", "2H", "ET", "BT", "P", "FT", "AET", "PEN"].includes(statusShort) || elapsed >= 45) {
+    systemRows.push({ minute: "45'", order: 45.1, primary: "Intervallo", secondary: "", system: true });
+  }
+  if (["2H", "ET", "BT", "P", "FT", "AET", "PEN"].includes(statusShort) || elapsed >= 46) {
+    systemRows.push({ minute: "46'", order: 46, primary: "Inizio secondo tempo", secondary: "", system: true });
+  }
+  if (["FT", "AET", "PEN"].includes(statusShort)) {
+    systemRows.push({ minute: "90'", order: 90.5, primary: "Finita", secondary: "", system: true });
+  }
+
+  return [...rows, ...systemRows].sort((a, b) => a.order - b.order);
+}
+
+function buildLiveEventRows(events = []) {
+  return (events || [])
+    .map(mapLiveEvent)
+    .filter(Boolean)
+    .sort((a, b) => a.order - b.order);
+}
+
+function mapLiveEvent(event = {}) {
+  const type = normalizePlayerName(event.type);
+  const detail = normalizePlayerName(event.detail);
+  const elapsed = Number(event.time?.elapsed || 0);
+  const extra = Number(event.time?.extra || 0);
+  const minute = elapsed ? `${elapsed}${extra ? `+${extra}` : ""}'` : "Live";
+  const team = event.team?.name || "";
+  const player = event.player?.name || unavailableText;
+  const assist = event.assist?.name || "";
+  const detailText = String(event.detail || event.type || "Evento");
+  const order = elapsed + extra / 10;
+
+  if (type.includes("missed penalty") || detail.includes("missed penalty") || detail.includes("penalty missed")) {
+    return {
+      minute,
+      order,
+      group: "penalty",
+      primary: `Rigore sbagliato ${team}`.trim(),
+      secondary: player,
+    };
+  }
+
+  if (type.includes("goal")) {
+    const isPenalty = detail.includes("penalty");
+    const isOwnGoal = detail.includes("own");
+    return {
+      minute,
+      order,
+      group: isPenalty ? "penalty" : "goal",
+      primary: `${isOwnGoal ? "Autogol" : isPenalty ? "Rigore segnato" : "Gol"} ${team}`.trim(),
+      secondary: [player, assist ? `assist ${assist}` : ""].filter(Boolean).join(" - "),
+    };
+  }
+
+  if (type.includes("card")) {
+    const isRed = detail.includes("red");
+    const isYellow = detail.includes("yellow");
+    return {
+      minute,
+      order,
+      group: "card",
+      primary: `${isRed ? "Espulsione" : isYellow ? "Ammonizione" : detailText} ${team}`.trim(),
+      secondary: player,
+    };
+  }
+
+  if (type.includes("subst")) {
+    return {
+      minute,
+      order,
+      group: "substitution",
+      primary: `Sostituzione ${team}`.trim(),
+      secondary: [player, assist ? `entra ${assist}` : ""].filter(Boolean).join(" - "),
+    };
+  }
+
+  if (type.includes("var") || detail.includes("penalty")) {
+    return {
+      minute,
+      order,
+      group: "penalty",
+      primary: detailText,
+      secondary: [team, player].filter(Boolean).join(" - "),
+    };
+  }
+
+  return null;
 }
 
 function renderLiveInjuries(injuries = []) {
@@ -2007,56 +2540,206 @@ function renderLiveInjuries(injuries = []) {
   return rows.length ? rows.join("") : `<div class="live-event-row"><span>Infortuni</span><strong>${unavailableText}</strong></div>`;
 }
 
-function renderLiveStatistics(statistics = []) {
+function renderLiveStatistics(statistics = [], teamsInfo = {}) {
   if (!statistics?.length) {
-    return `
-      <div class="live-stat-row"><span>Possesso palla</span><strong>${unavailableText}</strong></div>
-      <div class="live-stat-row"><span>Tiri</span><strong>${unavailableText}</strong></div>
-      <div class="live-stat-row"><span>Tiri in porta</span><strong>${unavailableText}</strong></div>
-      <div class="live-stat-row"><span>Expected goals</span><strong>${unavailableText}</strong></div>
-    `;
+    return `<div class="live-data-fallback live-compact-fallback"><strong>Statistiche live in aggiornamento</strong></div>`;
   }
 
-  const home = statistics[0];
-  const away = statistics[1];
+  const home = statistics[0] || {};
+  const away = statistics[1] || {};
   const rows = [
-    ["Possesso palla", "Ball Possession"],
-    ["Tiri", "Total Shots"],
-    ["Tiri in porta", "Shots on Goal"],
-    ["Expected goals", "expected_goals", "Expected Goals"],
-  ];
-
-  return rows
+    ["Possesso", "Ball Possession"],
+    ["Tiri", "Total Shots", "Shots total"],
+    ["In porta", "Shots on Goal"],
+    ["Corner", "Corner Kicks"],
+    ["Falli", "Fouls"],
+    ["xG", "expected_goals", "Expected Goals"],
+  ]
     .map(([label, ...types]) => {
       const homeValue = findApiStatistic(home, types);
       const awayValue = findApiStatistic(away, types);
-      return `<div class="live-stat-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(homeValue)} · ${escapeHtml(awayValue)}</strong></div>`;
+      return { label, homeValue, awayValue };
     })
-    .join("");
-}
+    .filter((row) => row.homeValue !== unavailableText || row.awayValue !== unavailableText);
 
-function renderLiveLineups(lineups = []) {
-  if (!lineups?.length) {
-    return `<div class="live-lineup-head"><span>Formazioni</span><strong>${unavailableText}</strong></div>`;
+  if (!rows.length) {
+    return `<div class="live-data-fallback live-compact-fallback"><strong>Statistiche live in aggiornamento</strong></div>`;
   }
 
-  return lineups
-    .map((lineup) => {
-      const starters = (lineup.startXI || [])
-        .map((item) => item?.player?.name)
-        .filter(Boolean)
-        .slice(0, 11);
-      return `
-        <div class="live-lineup-head">
-          <span>${escapeHtml(lineup.team?.name || unavailableText)}</span>
-          <strong>${escapeHtml(lineup.formation || unavailableText)}</strong>
-        </div>
-        <ul class="live-lineup-list">
-          ${starters.length ? starters.map((name) => `<li>${escapeHtml(name)}</li>`).join("") : `<li>${unavailableText}</li>`}
-        </ul>
-      `;
+  return `
+    <div class="live-stat-board">
+      <div class="live-stat-board-head">
+        <span>${escapeHtml(teamsInfo.home?.name || "Casa")}</span>
+        <span></span>
+        <span>${escapeHtml(teamsInfo.away?.name || "Trasferta")}</span>
+      </div>
+      ${rows
+        .map(
+          (row) => `
+            <div class="live-stat-row">
+              <strong>${escapeHtml(row.homeValue)}</strong>
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.awayValue)}</strong>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderLiveLineupsDetail(item = {}) {
+  const lineups = item.lineups || [];
+  const hasOfficialLineups = lineups.some((lineup) => (lineup.startXI || []).some((starter) => starter?.player?.name));
+  if (!hasOfficialLineups) {
+    return `
+      <div class="live-data-fallback live-lineups-fallback">
+        <strong>Formazioni ufficiali disponibili a ridosso del calcio d'inizio</strong>
+      </div>
+    `;
+  }
+
+  const fixture = item.fixture?.fixture || {};
+  const referee = fixture.referee || item.referee || unavailableText;
+  const temperature = formatLiveTemperature(item.weather?.temperature || fixture.weather?.temperature || fixture.weather?.temp);
+
+  return `
+    <div class="live-lineups-detail">
+      <div class="live-pitch" aria-label="Campo con formazioni ufficiali">
+        ${lineups.map(renderLivePitchTeam).join("")}
+      </div>
+      <div class="live-bench-grid">
+        ${lineups.map(renderLiveBench).join("")}
+      </div>
+      <div class="live-match-officials">
+        <div><span>Arbitro</span><strong>${escapeHtml(referee)}</strong></div>
+        <div><span>Temperatura</span><strong>${escapeHtml(temperature)}</strong></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLivePitchTeam(lineup = {}) {
+  const rows = buildLiveLineupRows(lineup);
+  return `
+    <section class="live-pitch-team">
+      <div class="live-pitch-team-head">
+        <strong>${escapeHtml(lineup.team?.name || unavailableText)}</strong>
+        <span>${escapeHtml(lineup.formation || "Modulo non disponibile")}</span>
+      </div>
+      <div class="live-pitch-lines">
+        ${rows
+          .map(
+            (row) => `
+              <div class="live-pitch-line" style="grid-template-columns: repeat(${Math.max(row.length, 1)}, minmax(0, 1fr));">
+                ${row.map((player) => renderLivePlayerDot(player)).join("")}
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderLivePlayerDot(player = {}) {
+  const name = player.name || unavailableText;
+  const position = player.pos || "";
+  return `
+    <div class="live-player-dot" title="${escapeAttribute(name)}">
+      <span>${escapeHtml(position || "XI")}</span>
+      <strong>${escapeHtml(shortenLivePlayerName(name))}</strong>
+    </div>
+  `;
+}
+
+function buildLiveLineupRows(lineup = {}) {
+  const starters = (lineup.startXI || [])
+    .map((item, index) => {
+      const player = item?.player || {};
+      const grid = parseLiveGrid(player.grid);
+      return {
+        name: player.name || "",
+        pos: player.pos || "",
+        row: grid?.row || null,
+        col: grid?.col || index + 1,
+        index,
+      };
     })
-    .join("");
+    .filter((player) => player.name)
+    .slice(0, 11);
+
+  if (!starters.length) return [];
+
+  if (starters.some((player) => player.row)) {
+    const grouped = starters.reduce((acc, player) => {
+      const key = player.row || 99;
+      if (!acc.has(key)) acc.set(key, []);
+      acc.get(key).push(player);
+      return acc;
+    }, new Map());
+    return [...grouped.entries()]
+      .sort(([rowA], [rowB]) => rowA - rowB)
+      .map(([, players]) => players.sort((a, b) => a.col - b.col || a.index - b.index));
+  }
+
+  return buildFallbackLineupRows(starters, lineup.formation);
+}
+
+function buildFallbackLineupRows(players = [], formation = "") {
+  const parts = String(formation || "")
+    .split("-")
+    .map((part) => Number(part))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const rowSizes = [1, ...parts];
+  const rows = [];
+  let cursor = 0;
+  rowSizes.forEach((size) => {
+    const row = players.slice(cursor, cursor + size);
+    if (row.length) rows.push(row);
+    cursor += size;
+  });
+  if (cursor < players.length) rows.push(players.slice(cursor));
+  return rows;
+}
+
+function parseLiveGrid(grid) {
+  const match = String(grid || "").match(/^(\d+):(\d+)$/);
+  if (!match) return null;
+  return { row: Number(match[1]), col: Number(match[2]) };
+}
+
+function renderLiveBench(lineup = {}) {
+  const substitutes = (lineup.substitutes || [])
+    .map((item) => item?.player?.name)
+    .filter(Boolean)
+    .slice(0, 10);
+
+  return `
+    <section class="live-bench">
+      <div class="live-lineup-head">
+        <span>Panchina ${escapeHtml(lineup.team?.name || "")}</span>
+        <strong>${escapeHtml(String(substitutes.length || 0))}</strong>
+      </div>
+      ${
+        substitutes.length
+          ? `<ul class="live-lineup-list">${substitutes.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ul>`
+          : `<div class="live-data-fallback live-compact-fallback"><strong>Panchina non disponibile</strong></div>`
+      }
+    </section>
+  `;
+}
+
+function shortenLivePlayerName(name = "") {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return name;
+  return parts[parts.length - 1].length >= 3 ? parts[parts.length - 1] : name;
+}
+
+function formatLiveTemperature(value) {
+  if (value === undefined || value === null || value === "") return "Meteo non disponibile";
+  if (typeof value === "number") return `${value} gradi`;
+  return String(value).replace("°C", " gradi").replace(" C", " gradi");
 }
 
 function renderLivePlayerStats(players = []) {
@@ -2085,6 +2768,35 @@ function findApiStatistic(teamStats = {}, types = []) {
 
 function formatLiveGoal(value) {
   return value === null || value === undefined ? unavailableText : String(value);
+}
+
+function formatLiveMinute(status = {}) {
+  const short = String(status?.short || "").toUpperCase();
+  const elapsed = status?.elapsed ?? status?.extra;
+  if (Number.isFinite(Number(elapsed)) && !["HT", "FT", "AET", "PEN"].includes(short)) {
+    return `${elapsed}'`;
+  }
+
+  return formatLiveStatus(status);
+}
+
+function formatLiveStatus(status = {}) {
+  const short = String(status?.short || "").toUpperCase();
+  const long = status?.long || "";
+  const labels = {
+    "1H": "1T",
+    HT: "Intervallo",
+    "2H": "2T",
+    ET: "Recupero",
+    BT: "Recupero",
+    P: "Rigori",
+    LIVE: "Live",
+    FT: "Finita",
+    AET: "Finita",
+    PEN: "Finita",
+  };
+
+  return labels[short] || long || short || "Live";
 }
 
 function formatLiveUpdateTime(value) {
